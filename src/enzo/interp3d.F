@@ -48,7 +48,7 @@ c-----------------------------------------------------------------------
 #include "fortran_types.def"
 c
       INTG_PREC MAX_REFINE, ijkn
-      parameter (MAX_REFINE = 32, ijkn = MAX_ANY_SINGLE_DIRECTION)
+      parameter (MAX_REFINE = 64, ijkn = MAX_ANY_SINGLE_DIRECTION)
 c
 c-----------------------------------------------------------------------
 c
@@ -217,7 +217,7 @@ c
                frac = - ( (-delf0*sprime) + (1._RKIND-chi1)*delf1 
      &                                    + (1._RKIND-chi2)*delf2
      &                                    + (1._RKIND-chi3)*delf3 ) /
-     &           (chi1*delf1 + chi2*delf2 + chi3*delf3 + 1.d-35)
+     &           (chi1*delf1 + chi2*delf2 + chi3*delf3 + tiny)
 c
                frac = min(frac, 1._RKIND)
                if (chi1+chi2+chi3 .eq. 0.0) frac = 0.0

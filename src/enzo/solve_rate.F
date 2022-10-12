@@ -805,7 +805,7 @@ c
                HII(i,j,k)   = HIIp(i)
                HeI(i,j,k)   = HeIp(i)
                HeII(i,j,k)  = HeIIp(i)
-               HeIII(i,j,k) = max(HeIIIp(i), 1.e-25_RKIND)
+               HeIII(i,j,k) = max(HeIIIp(i), tiny)
 c
 c               de(i,j,k)    = dep(i)
 c

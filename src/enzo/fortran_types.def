@@ -1,20 +1,20 @@
 #ifdef CONFIG_PFLOAT_4
-#define tiny 1.d-20
-#define huge 1.d+20
+#define tiny 1.d-37
+#define huge 1.d+37
 #define P_PREC real*4
       integer, parameter :: PKIND=4
 #endif
 
 #ifdef CONFIG_PFLOAT_8
-#define tiny 1.d-20
-#define huge 1.d+20
+#define tiny 1.d-37
+#define huge 1.d+37
 #define P_PREC real*8
       integer, parameter :: PKIND=8
 #endif
 
 #ifdef CONFIG_PFLOAT_16
-#define tiny 1.d-35
-#define huge 1.d+35
+#define tiny 1.d-37
+#define huge 1.d+37
 #define P_PREC real*8
       integer, parameter :: PKIND=8
 #endif
@@ -27,6 +27,8 @@
 
 
 #ifdef CONFIG_BFLOAT_8
+#define tiny 1.d-300
+#define huge 1.d+300
 #define R_PREC real*8
 #define CMPLX_PREC complex*16
       integer, parameter :: RKIND=8
