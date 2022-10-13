@@ -117,15 +117,15 @@ int OutputFromEvolveLevel(LevelHierarchyEntry *LevelArray[],TopGridData *MetaDat
       /* Make sure we are all synced up across processors. */
       CurrentMaximumDensity = CommunicationMaxValue(CurrentMaximumDensity);
       if (MyProcessorNumber == ROOT_PROCESSOR) {
-        fprintf(stderr, "Current maximum density is %"GSYM" g/cm^3.\n",
-                (CurrentMaximumDensity*DensityUnits));
+        fprintf(stderr, "Current (time="PSYM") maximum density is %"GSYM" g/cm^3.\n",
+                (Time*TimeUnits), (CurrentMaximumDensity*DensityUnits));
       }
 
       if (StopFirstTimeAtMetalEnrichedDensity > 0.) {
         CurrentMaximumMetalEnrichedDensity = CommunicationMaxValue(CurrentMaximumMetalEnrichedDensity);
         if (MyProcessorNumber == ROOT_PROCESSOR) {
-          fprintf(stderr, "Current maximum metal enriched density is %"GSYM" g/cm^3.\n",
-                  (CurrentMaximumMetalEnrichedDensity*DensityUnits));
+          fprintf(stderr, "Current (time="PSYM") maximum metal enriched density is %"GSYM" g/cm^3.\n",
+                  (Time*TimeUnits), (CurrentMaximumMetalEnrichedDensity*DensityUnits));
         }
       }
 
