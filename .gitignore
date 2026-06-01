@@ -60,8 +60,10 @@ run/results.js
 Make.mach.claire-linux
 *__test_standard.py
 run/test_output/
-# EnzoModules build artifacts (the pilot shared library is built locally / in CI)
+# EnzoModules build artifacts (shared libraries are built locally / in CI)
 EnzoModules/deps/*.so
+EnzoModules/deps/*.o
+src/enzo/libenzo_*.so
 EnzoModules/**/__pycache__/
 EnzoModules/.pytest_cache/
 EnzoModules/**/*.pyc

@@ -57,7 +57,34 @@ jobs:
         run: git diff --exit-code -- fixtures/
 
       - name: Run replay + physics tests
-        run: python -m pytest -q
+        run: python -m pytest -q -k "not hydro_rk"
 
       - name: Demo (Sod vs exact Riemann)
         run: python tools/demo_sod.py
+
+  # Heavier job: the hydro_rk / Dedner-MHD solvers link against the full Enzo
+  # shared library, so this builds Enzo serially (HDF5, no MPI) before testing.
+  hydro_rk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain + HDF5
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gfortran g++ libhdf5-dev zlib1g-dev
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install test deps
+        run: python -m pip install --upgrade pip pytest
+
+      - name: Build Enzo shared library + hydro_rk bridge
+        run: ./EnzoModules/deps/build_hydro_rk.sh
+
+      - name: Run hydro_rk + Dedner-MHD tests
+        working-directory: EnzoModules
+        run: python -m pytest tests/test_hydro_rk.py -q

@@ -78,11 +78,46 @@ step-by-step recipe to add your own):
   this one certified call and matches the exact Riemann solution to an L1
   density error of ~1.5e-3 on 200 cells.
 
+## C++ solvers: hydro_rk and Dedner MHD
+
+The Fortran-kernel examples above build a tiny standalone library.  The Enzo
+C++ solvers (`hydro_rk`, ZEUS) instead depend on Enzo's headers and global
+state, so they are wrapped by linking against the **full Enzo shared
+library**.  A second bridge (`src/enzo/enzomodules_hydro_rk_bridge.C`) and
+library (`libenzomodules_hydrork.so`) cover this:
+
+```bash
+./deps/build_hydro_rk.sh    # builds Enzo as a serial .so (slow), then the bridge
+python -m pytest tests/test_hydro_rk.py -q
+```
+
+Wrapped and certified so far:
+
+- **hydro_rk Riemann solvers** (`enzomodules.bridge.hydro_rk_line`): the
+  HLL / HLLC / LLF + PLM 1D line solvers.  `examples.hydro_rk_sod` evolves a
+  Sod tube with each and matches the exact Riemann solution to L1(rho) ~
+  2.5–3.2e-3 on 200 cells.
+- **Dedner divergence-cleaning MHD** (`enzomodules.bridge.mhd_rk_line`): the
+  HLLD (and HLL/LLF) + PLM MHD line solver with GLM cleaning.
+  `examples.mhd_brio_wu` evolves the Brio & Wu shock tube and reproduces its
+  structure while keeping the normal field `Bx` constant (divergence-free).
+
+The build fix that makes this possible (`MACH_SHARED_FLAGS`/`SHARED_OPT` for a
+non-macOS shared build) lives in `deps/build_hydro_rk.sh`.
+
+> **Not yet wrapped — ZEUS and the RK integrator sweeps.**  ZEUS
+> (`grid::ZeusSolver`, `Zeus_*Transport`) and the full RK2 sweeps are `grid::`
+> *methods*: they read a fully constructed `grid` object, not plain arrays.
+> Wrapping them needs a grid-fixture builder (construct a minimal grid +
+> globals, call the method) — the libyt `Grid_ConvertToLibyt` pattern.  The
+> library and bridge infrastructure here is the foundation; see
+> `docs/WRAPPING.md` for the planned approach.
+
 ## The per-kernel workflow
 
 **To add a kernel, follow [`docs/WRAPPING.md`](docs/WRAPPING.md)** — the
-step-by-step recipe, with `twoshock` (leaf) and `ppm_sweep_1d` (composite) as
-worked references.
+step-by-step recipe, with `twoshock` (leaf), `ppm_sweep_1d` (composite Fortran)
+and `hydro_rk_line` (libenzo-linked C++) as worked references.
 
 In short, each kernel goes through the same pipeline:
 

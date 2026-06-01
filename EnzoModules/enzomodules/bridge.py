@@ -120,6 +120,95 @@ def twoshock_raw(dls, drs, pls, prs, uls, urs,
     return list(c_pbar), list(c_ubar)
 
 
+# --------------------------------------------------------------------------
+# hydro_rk (Runge-Kutta MUSCL) line solvers, incl. Dedner-cleaning MHD.
+#
+# These live in a *separate* shared library (libenzomodules_hydrork.so) which
+# links against the full Enzo shared library, because the C++ solvers depend
+# on Enzo's headers and global state (unlike the standalone Fortran kernels).
+# --------------------------------------------------------------------------
+
+_HYDRORK_DEFAULT = os.path.join(_HERE, "..", "deps", "libenzomodules_hydrork.so")
+_hydrork = None
+
+#: Riemann solver codes (Enzo typedefs.h enum).
+HLL, LLF, HLLC, HLLD = 1, 3, 4, 6
+
+
+def hydrork_libpath():
+    env = os.environ.get("ENZOMODULES_HYDRORK_LIB", "")
+    return os.path.abspath(env) if env else os.path.abspath(_HYDRORK_DEFAULT)
+
+
+def hydrork_available():
+    return os.path.isfile(hydrork_libpath())
+
+
+def _load_hydrork():
+    global _hydrork
+    if _hydrork is None:
+        if not hydrork_available():
+            raise RuntimeError(
+                f"hydro_rk library not found at {hydrork_libpath()}.\n"
+                "Build it with EnzoModules/deps/build_hydro_rk.sh (needs the "
+                "full Enzo shared library), or set ENZOMODULES_HYDRORK_LIB.")
+        lib = ctypes.CDLL(hydrork_libpath())
+        d = ctypes.POINTER(ctypes.c_double)
+        common = [ctypes.c_int, ctypes.c_double, ctypes.c_double, ctypes.c_int,
+                  ctypes.c_double, ctypes.c_double]
+        lib.enzomodules_hydro_rk_line.restype = ctypes.c_int
+        lib.enzomodules_hydro_rk_line.argtypes = common + [
+            d, ctypes.c_int, ctypes.c_int, ctypes.c_int, d]
+        lib.enzomodules_mhd_rk_line.restype = ctypes.c_int
+        lib.enzomodules_mhd_rk_line.argtypes = common + [
+            ctypes.c_double, d, ctypes.c_int, ctypes.c_int, ctypes.c_int, d]
+        _hydrork = lib
+    return _hydrork
+
+
+def _line_flux(func, prim_rows, active_size, extra, gamma, theta_limiter,
+               nghost, small_rho, small_p):
+    neq = len(prim_rows)
+    ncells = len(prim_rows[0])
+    flat = [v for row in prim_rows for v in row]
+    c_prim = (ctypes.c_double * len(flat))(*[float(v) for v in flat])
+    c_flux = (ctypes.c_double * (neq * (active_size + 1)))()
+    args = [HLL, gamma, theta_limiter, nghost, small_rho, small_p]  # solver filled by caller
+    rc = func(*extra, c_prim, neq, ncells, active_size, c_flux)
+    if rc != 0:
+        raise RuntimeError(f"{func.__name__} returned {rc}")
+    return [[c_flux[f * (active_size + 1) + i] for i in range(active_size + 1)]
+            for f in range(neq)]
+
+
+def hydro_rk_line(solver, prim_rows, gamma=1.4, theta_limiter=1.5, nghost=3,
+                  small_rho=1e-20, small_p=1e-20):
+    """Reconstruction + Riemann flux for one hydro line (NEQ_HYDRO=5).
+
+    ``prim_rows`` is 5 rows ``[rho, eint, vx, vy, vz]`` each of length
+    ``ncells = active + 2*nghost``.  Returns 5 flux rows of length ``active+1``.
+    """
+    lib = _load_hydrork()
+    active = len(prim_rows[0]) - 2 * nghost
+    extra = [solver, gamma, theta_limiter, nghost, small_rho, small_p]
+    return _line_flux(lib.enzomodules_hydro_rk_line, prim_rows, active, extra,
+                      gamma, theta_limiter, nghost, small_rho, small_p)
+
+
+def mhd_rk_line(solver, prim_rows, c_h, gamma=1.4, theta_limiter=1.5, nghost=3,
+                small_rho=1e-20, small_p=1e-20):
+    """Reconstruction + Riemann flux for one Dedner-MHD line (NEQ_MHD=9).
+
+    ``prim_rows`` is 9 rows ``[rho, eint, vx, vy, vz, Bx, By, Bz, Phi]``.
+    ``c_h`` is the Dedner divergence-cleaning wave speed.  Returns 9 flux rows.
+    """
+    lib = _load_hydrork()
+    active = len(prim_rows[0]) - 2 * nghost
+    extra = [solver, gamma, theta_limiter, nghost, small_rho, small_p, c_h]
+    return _line_flux(lib.enzomodules_mhd_rk_line, prim_rows, active, extra,
+                      gamma, theta_limiter, nghost, small_rho, small_p)
+
+
 def ppm_sweep_1d(dslice, eslice, uslice, vslice, wslice, pslice,
                  i1, i2, dx, dt, gamma, want_fluxes=False):
     """Direct binding to ``enzomodules_ppm_sweep_1d``.
