@@ -4,13 +4,17 @@
 /
 /  PURPOSE:
 /    Exercise Enzo's primordial chemistry + radiative cooling network
-/    (grid::SolveRateAndCoolEquations -> solve_rate_cool) in isolation.  The
-/    rate coefficients are computed analytically by InitializeRateData
+/    (grid::SolveRateAndCoolEquations -> solve_rate_cool) in isolation, for any
+/    MultiSpecies level:
+/        1 ->  6 species (e-, HI, HII, HeI, HeII, HeIII)
+/        2 ->  9 species (+ HM, H2I, H2II)
+/        3 -> 12 species (+ DI, DII, HDI)
+/    Rate coefficients are computed analytically by InitializeRateData
 /    (calc_rates), so no external data files are needed.
 /
-/    Builds a uniform cell of gas with the 6-species set (e-, HI, HII, HeI,
-/    HeII, HeIII), advances one chemistry+cooling step, and returns the updated
-/    species and energy.  Compiled with Enzo headers, linked against libenzo.
+/    Builds a uniform block of gas with the requested species set, advances one
+/    chemistry+cooling step, and returns the updated species and energy.
+/    Compiled with Enzo headers, linked against libenzo.
 /
 ************************************************************************/
 
@@ -31,25 +35,51 @@
 int SetDefaultGlobalValues(TopGridData &MetaData);
 int InitializeRateData(FLOAT Time);
 
+/* Canonical species ordering by MultiSpecies level. */
+static int species_field_types(int multispecies, int *types)
+{
+  int k = 0;
+  types[k++] = ElectronDensity;
+  types[k++] = HIDensity;
+  types[k++] = HIIDensity;
+  types[k++] = HeIDensity;
+  types[k++] = HeIIDensity;
+  types[k++] = HeIIIDensity;
+  if (multispecies > 1) {
+    types[k++] = HMDensity;
+    types[k++] = H2IDensity;
+    types[k++] = H2IIDensity;
+  }
+  if (multispecies > 2) {
+    types[k++] = DIDensity;
+    types[k++] = DIIDensity;
+    types[k++] = HDIDensity;
+  }
+  return k;   /* number of species */
+}
+
 extern "C" {
 
-/* Advance one primordial-chemistry + cooling step on a uniform block of `n`
- * cells.  All species are mass densities in code units (HI/HII in H-mass,
- * He* in He-mass); `e_tot` is total specific energy.  Arrays length n are
- * updated in place.  Units are physical cgs scalings.  Returns 0 on success. */
+int enzomodules_num_species(int multispecies)
+{ return (multispecies > 2) ? 12 : (multispecies > 1) ? 9 : 6; }
+
+/* Advance one chemistry+cooling step on `n` cells at MultiSpecies level
+ * `multispecies` (1|2|3).  rho/e_tot are length n; species_flat is
+ * [nspecies][n] (row-major) in the canonical order above (nspecies from
+ * enzomodules_num_species).  All densities are code-unit mass densities;
+ * units are physical cgs scalings.  species_flat and e_tot are updated in
+ * place.  Returns 0 on success. */
 int enzomodules_chemistry_step(
-    int n, double dt,
+    int multispecies, int n, double dt,
     double density_units, double length_units, double time_units,
-    double *rho, double *e_tot,
-    double *de, double *HI, double *HII,
-    double *HeI, double *HeII, double *HeIII)
+    double *rho, double *e_tot, double *species_flat)
 {
   TopGridData MetaData;
   SetDefaultGlobalValues(MetaData);
 
-  MultiSpecies        = 1;
+  MultiSpecies        = multispecies;
   RadiativeCooling    = 1;
-  RadiationFieldType  = 0;     /* no UV background */
+  RadiationFieldType  = 0;
   ComovingCoordinates = 0;
   DualEnergyFormalism = 0;
   HydroMethod         = 0;
@@ -62,33 +92,34 @@ int enzomodules_chemistry_step(
 
   if (InitializeRateData(0.0) == FAIL) return 2;
 
+  int sptypes[12];
+  int nspecies = species_field_types(multispecies, sptypes);
+
+  /* Field list: Density, TotalEnergy, Velocity1-3, then the species. */
+  std::vector<int> ftypes;
+  ftypes.push_back(Density);
+  ftypes.push_back(TotalEnergy);
+  ftypes.push_back(Velocity1);
+  ftypes.push_back(Velocity2);
+  ftypes.push_back(Velocity3);
+  for (int s = 0; s < nspecies; s++) ftypes.push_back(sptypes[s]);
+
   grid g;
   int   dims[3]  = { n, 1, 1 };
   FLOAT left[3]  = { (FLOAT)0.0, (FLOAT)0.0, (FLOAT)0.0 };
   FLOAT right[3] = { (FLOAT)1.0, (FLOAT)1.0, (FLOAT)1.0 };
-  int   ftypes[11] = { Density, TotalEnergy, Velocity1, Velocity2, Velocity3,
-                       ElectronDensity, HIDensity, HIIDensity,
-                       HeIDensity, HeIIDensity, HeIIIDensity };
-  g.EnzoModulesSetupGrid(1, dims, left, right, 11, ftypes, dt);
+  g.EnzoModulesSetupGrid(1, dims, left, right, (int)ftypes.size(), ftypes.data(), dt);
 
-  g.EnzoModulesSetField(g.EnzoModulesFieldIndex(Density),         rho);
-  g.EnzoModulesSetField(g.EnzoModulesFieldIndex(TotalEnergy),     e_tot);
-  g.EnzoModulesSetField(g.EnzoModulesFieldIndex(ElectronDensity), de);
-  g.EnzoModulesSetField(g.EnzoModulesFieldIndex(HIDensity),       HI);
-  g.EnzoModulesSetField(g.EnzoModulesFieldIndex(HIIDensity),      HII);
-  g.EnzoModulesSetField(g.EnzoModulesFieldIndex(HeIDensity),      HeI);
-  g.EnzoModulesSetField(g.EnzoModulesFieldIndex(HeIIDensity),     HeII);
-  g.EnzoModulesSetField(g.EnzoModulesFieldIndex(HeIIIDensity),    HeIII);
+  g.EnzoModulesSetField(g.EnzoModulesFieldIndex(Density),     rho);
+  g.EnzoModulesSetField(g.EnzoModulesFieldIndex(TotalEnergy), e_tot);
+  for (int s = 0; s < nspecies; s++)
+    g.EnzoModulesSetField(g.EnzoModulesFieldIndex(sptypes[s]), species_flat + (size_t)s * n);
 
   if (g.SolveRateAndCoolEquations(0) == FAIL) return 1;
 
-  g.EnzoModulesGetField(g.EnzoModulesFieldIndex(TotalEnergy),     e_tot);
-  g.EnzoModulesGetField(g.EnzoModulesFieldIndex(ElectronDensity), de);
-  g.EnzoModulesGetField(g.EnzoModulesFieldIndex(HIDensity),       HI);
-  g.EnzoModulesGetField(g.EnzoModulesFieldIndex(HIIDensity),      HII);
-  g.EnzoModulesGetField(g.EnzoModulesFieldIndex(HeIDensity),      HeI);
-  g.EnzoModulesGetField(g.EnzoModulesFieldIndex(HeIIDensity),     HeII);
-  g.EnzoModulesGetField(g.EnzoModulesFieldIndex(HeIIIDensity),    HeIII);
+  g.EnzoModulesGetField(g.EnzoModulesFieldIndex(TotalEnergy), e_tot);
+  for (int s = 0; s < nspecies; s++)
+    g.EnzoModulesGetField(g.EnzoModulesFieldIndex(sptypes[s]), species_flat + (size_t)s * n);
   return 0;
 }
 

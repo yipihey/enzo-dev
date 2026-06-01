@@ -146,12 +146,13 @@ reads the result back.  Certified on this infrastructure so far:
   `sin(pi x)` shapes to <5e-3, converged residual ~1e-9) plus linearity and
   superposition.
 - **Chemistry / cooling** (`bridge.chemistry_step`) — the non-Grackle
-  primordial 6-species network + radiative cooling
-  (`grid::SolveRateAndCoolEquations`; rates computed analytically by
-  `InitializeRateData`, no data files).  `tests/test_chemistry.py` certifies
-  H and He nuclei conservation, charge conservation
-  (n_e = HII + HeII/4 + HeIII/2), and the physical direction (warm dense gas
-  recombines and cools).
+  primordial network + radiative cooling (`grid::SolveRateAndCoolEquations`;
+  rates computed analytically by `InitializeRateData`, no data files) at **all
+  three MultiSpecies levels**: 6 species (H, He), 9 species (+ H-/H2/H2+), and
+  12 species (+ D/D+/HD).  `tests/test_chemistry.py` certifies H and He nuclei
+  conservation at each level, charge conservation
+  (n_e = HII + HeII/4 + HeIII/2), and physical direction — warm dense gas
+  recombines and cools, cold gas forms H2 (9-species) and HD (12-species).
 
 This is the foundation for wrapping chemistry and the photon transport solver
 — they reuse the same primitives; see `docs/WRAPPING.md`.

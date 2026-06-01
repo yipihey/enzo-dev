@@ -288,43 +288,60 @@ def cic_deposit(particles, dims, left=(0.0, 0.0, 0.0), right=(1.0, 1.0, 1.0)):
     return [out[k] for k in range(osize.value)], ocv.value
 
 
-def chemistry_step(rho, e_tot, de, HI, HII, HeI, HeII, HeIII, dt,
+# Canonical species ordering by MultiSpecies level (matches the C bridge).
+SPECIES_6 = ["De", "HI", "HII", "HeI", "HeII", "HeIII"]
+SPECIES_9 = SPECIES_6 + ["HM", "H2I", "H2II"]
+SPECIES_12 = SPECIES_9 + ["DI", "DII", "HDI"]
+SPECIES_BY_LEVEL = {1: SPECIES_6, 2: SPECIES_9, 3: SPECIES_12}
+
+
+def chemistry_step(rho, e_tot, species, dt, multispecies=None,
                    density_units=1.673e-24, length_units=3.086e21,
                    time_units=3.156e13):
-    """Advance one primordial-chemistry + radiative-cooling step on a block of
-    cells (legacy grid::SolveRateAndCoolEquations, the non-Grackle MultiSpecies
-    network).
+    """Advance one primordial-chemistry + radiative-cooling step (legacy
+    grid::SolveRateAndCoolEquations, the non-Grackle MultiSpecies network).
 
-    All arguments are equal-length lists of mass densities in code units
-    (HI/HII in H-mass, He* in He-mass; ``de`` electron density) plus ``e_tot``
-    total specific energy.  Units are physical cgs scalings.  Returns updated
-    ``(e_tot, de, HI, HII, HeI, HeII, HeIII)`` as new lists.
+    Supports all three MultiSpecies levels:
+      1 ->  6 species (De, HI, HII, HeI, HeII, HeIII)
+      2 ->  9 species (+ HM, H2I, H2II)
+      3 -> 12 species (+ DI, DII, HDI)
+
+    ``species`` is a dict {name: list} of code-unit mass densities; ``rho`` and
+    ``e_tot`` are lists.  ``multispecies`` is inferred from the species present
+    if not given.  Returns ``(e_tot, species_dict)`` updated.
     """
     lib = _load_gridlib()
     if not hasattr(lib, "_chem_set"):
         d = ctypes.POINTER(ctypes.c_double)
         lib.enzomodules_chemistry_step.restype = ctypes.c_int
         lib.enzomodules_chemistry_step.argtypes = [
-            ctypes.c_int, ctypes.c_double, ctypes.c_double, ctypes.c_double,
-            ctypes.c_double] + [d] * 8
+            ctypes.c_int, ctypes.c_int, ctypes.c_double, ctypes.c_double,
+            ctypes.c_double, ctypes.c_double, d, d, d]
+        lib.enzomodules_num_species.restype = ctypes.c_int
+        lib.enzomodules_num_species.argtypes = [ctypes.c_int]
         lib._chem_set = True
+
+    if multispecies is None:
+        multispecies = 3 if "DI" in species else 2 if "H2I" in species else 1
+    names = SPECIES_BY_LEVEL[multispecies]
     n = len(rho)
 
-    def arr(v):
-        return (ctypes.c_double * n)(*[float(x) for x in v])
+    flat = []
+    for name in names:
+        flat.extend(float(v) for v in species[name])
+    c_flat = (ctypes.c_double * (len(names) * n))(*flat)
+    c_rho = (ctypes.c_double * n)(*[float(v) for v in rho])
+    c_e = (ctypes.c_double * n)(*[float(v) for v in e_tot])
 
-    c = {name: arr(v) for name, v in
-         dict(rho=rho, e=e_tot, de=de, HI=HI, HII=HII,
-              HeI=HeI, HeII=HeII, HeIII=HeIII).items()}
     rc = lib.enzomodules_chemistry_step(
-        n, float(dt), float(density_units), float(length_units),
-        float(time_units),
-        c["rho"], c["e"], c["de"], c["HI"], c["HII"],
-        c["HeI"], c["HeII"], c["HeIII"])
+        int(multispecies), n, float(dt), float(density_units),
+        float(length_units), float(time_units), c_rho, c_e, c_flat)
     if rc != 0:
         raise RuntimeError(f"enzomodules_chemistry_step returned {rc}")
-    g = lambda k: [c[k][i] for i in range(n)]
-    return g("e"), g("de"), g("HI"), g("HII"), g("HeI"), g("HeII"), g("HeIII")
+
+    out = {name: [c_flat[s * n + i] for i in range(n)]
+           for s, name in enumerate(names)}
+    return [c_e[i] for i in range(n)], out
 
 
 def poisson_solve(rhs, dims):
