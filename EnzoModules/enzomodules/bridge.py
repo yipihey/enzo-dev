@@ -288,6 +288,45 @@ def cic_deposit(particles, dims, left=(0.0, 0.0, 0.0), right=(1.0, 1.0, 1.0)):
     return [out[k] for k in range(osize.value)], ocv.value
 
 
+def chemistry_step(rho, e_tot, de, HI, HII, HeI, HeII, HeIII, dt,
+                   density_units=1.673e-24, length_units=3.086e21,
+                   time_units=3.156e13):
+    """Advance one primordial-chemistry + radiative-cooling step on a block of
+    cells (legacy grid::SolveRateAndCoolEquations, the non-Grackle MultiSpecies
+    network).
+
+    All arguments are equal-length lists of mass densities in code units
+    (HI/HII in H-mass, He* in He-mass; ``de`` electron density) plus ``e_tot``
+    total specific energy.  Units are physical cgs scalings.  Returns updated
+    ``(e_tot, de, HI, HII, HeI, HeII, HeIII)`` as new lists.
+    """
+    lib = _load_gridlib()
+    if not hasattr(lib, "_chem_set"):
+        d = ctypes.POINTER(ctypes.c_double)
+        lib.enzomodules_chemistry_step.restype = ctypes.c_int
+        lib.enzomodules_chemistry_step.argtypes = [
+            ctypes.c_int, ctypes.c_double, ctypes.c_double, ctypes.c_double,
+            ctypes.c_double] + [d] * 8
+        lib._chem_set = True
+    n = len(rho)
+
+    def arr(v):
+        return (ctypes.c_double * n)(*[float(x) for x in v])
+
+    c = {name: arr(v) for name, v in
+         dict(rho=rho, e=e_tot, de=de, HI=HI, HII=HII,
+              HeI=HeI, HeII=HeII, HeIII=HeIII).items()}
+    rc = lib.enzomodules_chemistry_step(
+        n, float(dt), float(density_units), float(length_units),
+        float(time_units),
+        c["rho"], c["e"], c["de"], c["HI"], c["HII"],
+        c["HeI"], c["HeII"], c["HeIII"])
+    if rc != 0:
+        raise RuntimeError(f"enzomodules_chemistry_step returned {rc}")
+    g = lambda k: [c[k][i] for i in range(n)]
+    return g("e"), g("de"), g("HI"), g("HII"), g("HeI"), g("HeII"), g("HeIII")
+
+
 def poisson_solve(rhs, dims):
     """Solve the discrete Poisson equation L(phi) = rhs with Enzo's multigrid
     solver (the engine behind grid::SolveForPotential).

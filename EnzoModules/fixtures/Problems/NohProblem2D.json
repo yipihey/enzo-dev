@@ -1,0 +1,85 @@
+{
+  "grids": [
+    {
+      "dims": [
+        106,
+        106,
+        1
+      ],
+      "fields": [
+        {
+          "dims": [
+            106,
+            106,
+            1
+          ],
+          "name": "Density",
+          "stats": {
+            "count": 11236,
+            "max": 1.0,
+            "mean": 1.0,
+            "min": 1.0,
+            "sum": 11236.0
+          },
+          "type": 0
+        },
+        {
+          "dims": [
+            106,
+            106,
+            1
+          ],
+          "name": "TotalEnergy",
+          "stats": {
+            "count": 11236,
+            "max": 0.500001499999,
+            "mean": 0.500001499999,
+            "min": 0.500001499999,
+            "sum": 5618.01685399
+          },
+          "type": 1
+        },
+        {
+          "dims": [
+            106,
+            106,
+            1
+          ],
+          "name": "Velocity1",
+          "stats": {
+            "count": 11236,
+            "max": 0.980580675691,
+            "mean": -0.636351745602,
+            "min": -0.999988102532,
+            "sum": -7150.04821359
+          },
+          "type": 4
+        },
+        {
+          "dims": [
+            106,
+            106,
+            1
+          ],
+          "name": "Velocity2",
+          "stats": {
+            "count": 11236,
+            "max": 0.980580675691,
+            "mean": -0.636351745602,
+            "min": -0.999988102532,
+            "sum": -7150.04821359
+          },
+          "type": 5
+        }
+      ],
+      "index": 0,
+      "num_particles": 0,
+      "rank": 2
+    }
+  ],
+  "name": "NohProblem2D",
+  "num_grids": 1,
+  "paramfile": "run/Hydro/Hydro-2D/NohProblem2D/NohProblem2D.enzo",
+  "problem_type": 9,
+  "schema": 1
+}

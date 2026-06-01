@@ -145,6 +145,13 @@ reads the result back.  Certified on this infrastructure so far:
   certifies it against manufactured solutions in 1D/2D/3D (recovers
   `sin(pi x)` shapes to <5e-3, converged residual ~1e-9) plus linearity and
   superposition.
+- **Chemistry / cooling** (`bridge.chemistry_step`) — the non-Grackle
+  primordial 6-species network + radiative cooling
+  (`grid::SolveRateAndCoolEquations`; rates computed analytically by
+  `InitializeRateData`, no data files).  `tests/test_chemistry.py` certifies
+  H and He nuclei conservation, charge conservation
+  (n_e = HII + HeII/4 + HeIII/2), and the physical direction (warm dense gas
+  recombines and cools).
 
 This is the foundation for wrapping chemistry and the photon transport solver
 — they reuse the same primitives; see `docs/WRAPPING.md`.
@@ -169,6 +176,12 @@ Sedov blast, Implosion, Kelvin-Helmholtz, Noh) through the single dispatch and
 checks the generated fields — e.g. the Sod IC has the correct left/right
 density states.  This is exactly what a rewrite needs to cross-check its own
 initial-condition generators against the reference, problem by problem.
+
+`tools/capture_problems.py` snapshots a compact **golden signature** of each
+problem's initial conditions (per-field dims + min/max/mean/sum, per the
+`fixtures/Problems/*.json`); `tests/test_problem_fixtures.py` re-initializes
+and compares, catching any drift in Enzo's IC generators — and giving a rewrite
+a reference to diff its own generators against.
 
 > Self-contained (analytic) problems work directly; problem types that read
 > external data (e.g. cosmological initial-condition files) need that data
