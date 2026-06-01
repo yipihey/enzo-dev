@@ -58,6 +58,13 @@ def _load() -> ctypes.CDLL:
             d, d,                                               # pbar ubar
             ctypes.c_int, d, ctypes.c_int, ctypes.c_double,     # gravity grslice idual eta1
         ]
+        lib.enzomodules_ppm_sweep_1d.restype = ctypes.c_int
+        lib.enzomodules_ppm_sweep_1d.argtypes = [
+            d, d, d, d, d, d,                                   # dslice eslice uslice vslice wslice pslice
+            ctypes.c_int, ctypes.c_int, ctypes.c_int,          # idim i1 i2
+            ctypes.c_double, ctypes.c_double, ctypes.c_double,  # dx dt gamma
+            d, d, d,                                            # df ef uf (may be NULL)
+        ]
         _lib = lib
     return _lib
 
@@ -111,3 +118,37 @@ def twoshock_raw(dls, drs, pls, prs, uls, urs,
         int(gravity), c_grslice, int(idual), float(eta1),
     )
     return list(c_pbar), list(c_ubar)
+
+
+def ppm_sweep_1d(dslice, eslice, uslice, vslice, wslice, pslice,
+                 i1, i2, dx, dt, gamma, want_fluxes=False):
+    """Direct binding to ``enzomodules_ppm_sweep_1d``.
+
+    Runs one PPM hydro update of a 1D slice (inteuler -> twoshock ->
+    flux_twoshock -> euler).  Sequences are length ``idim``; ``i1``/``i2`` are
+    the 1-based inclusive active-cell range (>= 3 ghost cells each side).
+    Returns the updated ``(dslice, eslice, uslice, vslice, wslice)`` as new
+    lists, and -- if ``want_fluxes`` -- a ``(df, ef, uf)`` tuple, else None.
+    """
+    lib = _load()
+    idim = len(dslice)
+    c_d, c_e = _carr(dslice), _carr(eslice)
+    c_u, c_v, c_w = _carr(uslice), _carr(vslice), _carr(wslice)
+    c_p = _carr(pslice)
+    if want_fluxes:
+        c_df = (ctypes.c_double * idim)()
+        c_ef = (ctypes.c_double * idim)()
+        c_uf = (ctypes.c_double * idim)()
+    else:
+        c_df = c_ef = c_uf = None
+    rc = lib.enzomodules_ppm_sweep_1d(
+        c_d, c_e, c_u, c_v, c_w, c_p,
+        int(idim), int(i1), int(i2),
+        float(dx), float(dt), float(gamma),
+        c_df, c_ef, c_uf,
+    )
+    if rc != 0:
+        raise RuntimeError(f"enzomodules_ppm_sweep_1d returned {rc}")
+    state = (list(c_d), list(c_e), list(c_u), list(c_v), list(c_w))
+    fluxes = (list(c_df), list(c_ef), list(c_uf)) if want_fluxes else None
+    return state, fluxes

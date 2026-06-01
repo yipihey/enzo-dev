@@ -55,6 +55,43 @@ void enzomodules_twoshock(
     double *pbar, double *ubar,      /* resolved interface state (out)*/
     int gravity, double *grslice, int idual, double eta1);
 
+/* ------------------------------------------------------------------ *
+ *  Hydro: one directional PPM hydro update of a 1D slice
+ *
+ *  Composite kernel that reproduces the numerical core of the Enzo
+ *  Eulerian PPM solver's directional sweep (src/enzo/Grid_xEulerSweep.C):
+ *
+ *      inteuler  ->  twoshock  ->  flux_twoshock  ->  euler
+ *
+ *  for the simplest faithful configuration: no gravity, no dual energy,
+ *  no colour fields, no artificial diffusion / slope flattening, PPM
+ *  reconstruction + two-shock Riemann solver.  It is the worked example
+ *  for wrapping a *composite* solver (not just a leaf kernel) behind the
+ *  bridge.
+ *
+ *  The slice arrays are 1-based Fortran slabs of length idim (jdim = 1).
+ *  Indices i1..i2 are the active (non-ghost) cells; PPM needs >= 3 ghost
+ *  cells on each side, so the caller must size idim = (i2-i1+1) + 2*NGHOST
+ *  with NGHOST >= 3 and fill/refresh ghosts (boundary conditions) itself.
+ *
+ *  Inputs  : dslice (density), eslice (total specific energy),
+ *            uslice/vslice/wslice (velocities), pslice (pressure,
+ *            precomputed by the caller -- Enzo computes it once per step).
+ *  Outputs : dslice, eslice, uslice, vslice, wslice are updated in place
+ *            with the new state after a timestep dt.  Optionally df/ef/uf
+ *            (density/energy/normal-momentum fluxes) are returned if the
+ *            pointers are non-NULL.
+ *
+ *  dx is the (uniform) cell width.  Returns 0 on success.
+ * ------------------------------------------------------------------ */
+int enzomodules_ppm_sweep_1d(
+    double *dslice, double *eslice,
+    double *uslice, double *vslice, double *wslice,
+    double *pslice,
+    int idim, int i1, int i2,
+    double dx, double dt, double gamma,
+    double *df, double *ef, double *uf);   /* flux outputs, may be NULL */
+
 #ifdef __cplusplus
 }
 #endif

@@ -27,14 +27,32 @@ CXX="${CXX:-g++}"
 
 # Match Enzo's precision configuration via cpp defines.
 DEFS="-DCONFIG_BFLOAT_8 -DCONFIG_PFLOAT_8 -DSMALL_INTS"
-FFLAGS="-cpp ${DEFS} -I${enzo_src} -O2 -fPIC"
-CXXFLAGS="-O2 -fPIC -I${enzo_src}"
+# Fortran flags mirror Enzo's linux-gnu machine config (Make.mach.linux-gnu):
+# fixed-line-length-132 (some kernels emit long preprocessed lines, e.g.
+# CALL f_warning(__FILE__,...)), legacy std, and single trailing underscore
+# so the FORTRAN_NAME(NAME)=NAME_ convention in the bridge resolves.
+FFLAGS="-cpp ${DEFS} -I${enzo_src} -O2 -fPIC -ffixed-line-length-132 -std=legacy -fno-second-underscore"
+CXXFLAGS="-O2 -fPIC -I${enzo_src} -DENZOMODULES_STANDALONE"
 
-# Leaf Fortran kernels exposed by the bridge.  Add files here as more
-# kernels are wrapped (flux_twoshock.F, intvar.F, ...).
+# Fortran kernels exposed by the bridge, plus their internal call-closure
+# (e.g. inteuler -> intvar/intprim/calc_eigen/intpos; flux_twoshock ->
+# flux_hll).  Add files here as more kernels are wrapped.
 FKERNELS=(
   "twoshock.F"
+  # PPM 1D sweep closure (inteuler -> twoshock -> flux_twoshock -> euler):
+  "inteuler.F"
+  "intvar.F"
+  "intprim.F"
+  "calc_eigen.F"
+  "intpos.F"
+  "flux_twoshock.F"
+  "flux_hll.F"
+  "euler.F"
 )
+# Note: the ERROR_MESSAGE/WARNING_MESSAGE macros in the reconstruction
+# kernels resolve to fc_error/fc_warning, which the bridge provides as light
+# standalone stubs (guarded by -DENZOMODULES_STANDALONE) so we avoid pulling
+# in Enzo's MPI-dependent c_message.C.
 
 echo "[build_pilot] ENZO_SRC = ${enzo_src}"
 echo "[build_pilot] output   = ${out}"

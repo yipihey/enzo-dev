@@ -13,13 +13,13 @@ on:
     paths:
       - "EnzoModules/**"
       - "src/enzo/enzomodules_bridge.*"
-      - "src/enzo/twoshock.F"
+      - "src/enzo/*.F"
       - ".github/workflows/enzomodules.yml"
   pull_request:
     paths:
       - "EnzoModules/**"
       - "src/enzo/enzomodules_bridge.*"
-      - "src/enzo/twoshock.F"
+      - "src/enzo/*.F"
       - ".github/workflows/enzomodules.yml"
   workflow_dispatch:
 
@@ -45,14 +45,19 @@ jobs:
       - name: Build pilot library
         run: ./deps/build_pilot.sh
 
-      - name: Capture-and-validate fixtures (against exact Riemann solver)
-        # Regenerates fixtures and fails if the kernel's star-state drifts
-        # from the analytic solution.
-        run: python tools/capture_twoshock.py
+      - name: Capture-and-validate fixtures (against exact/analytic solutions)
+        # Regenerates fixtures and fails if a kernel drifts from the analytic
+        # reference (twoshock star-state; PPM Sod L1 error).
+        run: |
+          python tools/capture_twoshock.py
+          python tools/capture_ppm_sweep.py
 
       - name: Fail if fixtures drifted
         # The committed fixtures must match a fresh capture bit-for-bit.
         run: git diff --exit-code -- fixtures/
 
-      - name: Run replay tests
+      - name: Run replay + physics tests
         run: python -m pytest -q
+
+      - name: Demo (Sod vs exact Riemann)
+        run: python tools/demo_sod.py

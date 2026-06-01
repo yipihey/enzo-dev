@@ -27,11 +27,16 @@ EnzoModules/
     bridge.py             #   ctypes loader + precision check + raw bindings
     diff.py               #   Tolerance / isclose / compare
     fixtures.py           #   read/write the .fixture format
-    hydro.py              #   ergonomic kernel wrappers (twoshock, ...)
-  deps/build_pilot.sh     # builds libenzomodules_pilot.so (bridge + leaf kernels)
-  fixtures/Hydro/twoshock/*.fixture   # golden inputs/outputs (committed)
-  tools/capture_twoshock.py           # capture + validate fixtures
-  tests/                  # pytest replay suite
+    hydro.py              #   ergonomic kernel wrappers (twoshock, ppm_sweep_1d, ...)
+    examples/             #   worked examples built on the certified kernels
+      riemann.py          #     exact Riemann solver (analytic truth)
+      ppm_sod.py          #     full 1D PPM hydro driver (Sod shock tube)
+  deps/build_pilot.sh     # builds libenzomodules_pilot.so (bridge + kernel closure)
+  fixtures/Hydro/*/*.fixture          # golden inputs/outputs (committed)
+  tools/capture_*.py      # capture + validate fixtures
+  tools/demo_sod.py       # run the Sod tube and compare to exact
+  tests/                  # pytest replay + physics suite
+  docs/WRAPPING.md        # how to wrap & certify a new kernel (start here to contribute)
 ```
 
 The C side is two files in the Enzo tree:
@@ -49,13 +54,37 @@ python tools/capture_twoshock.py # run kernel, validate vs exact solver, write f
 python -m pytest -q              # replay tests
 ```
 
-The pilot build compiles **only** the bridge plus the leaf Fortran kernels it
-exposes — not the full Enzo executable — so it is fast and hermetic.
+The pilot build compiles **only** the bridge plus the Fortran kernels it
+exposes (and their internal call-closure) — not the full Enzo executable — so
+it is fast and hermetic.
+
+See the full PPM solver in action against the analytic solution:
+
+```bash
+python tools/demo_sod.py            # ASCII plot: PPM vs exact Riemann, L1 error
+```
+
+## Two worked examples
+
+EnzoModules ships two reference wrappings (see `docs/WRAPPING.md` for the
+step-by-step recipe to add your own):
+
+- **`twoshock`** — a *leaf* Fortran kernel (the two-shock approximate Riemann
+  solver): pure array-in/array-out, the simplest case.
+- **`ppm_sweep_1d`** — a *composite* solver reproducing the numerical core of
+  Enzo's Eulerian PPM directional sweep (`Grid_xEulerSweep.C`):
+  `inteuler → twoshock → flux_twoshock → euler`. The
+  `enzomodules.examples.ppm_sod` driver evolves a Sod shock tube using only
+  this one certified call and matches the exact Riemann solution to an L1
+  density error of ~1.5e-3 on 200 cells.
 
 ## The per-kernel workflow
 
-Each kernel goes through the same pipeline; `twoshock` (two-shock approximate
-Riemann solver) is the worked pilot:
+**To add a kernel, follow [`docs/WRAPPING.md`](docs/WRAPPING.md)** — the
+step-by-step recipe, with `twoshock` (leaf) and `ppm_sweep_1d` (composite) as
+worked references.
+
+In short, each kernel goes through the same pipeline:
 
 1. **Wrap** — add an `extern "C"` shim in `enzomodules_bridge.{h,C}` that
    forwards to the Fortran routine; add the `.F` file to `build_pilot.sh`.

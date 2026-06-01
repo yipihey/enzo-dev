@@ -42,6 +42,39 @@ def twoshock(dls: Sequence[float], drs: Sequence[float],
     )
 
 
+def ppm_sweep_1d(dslice, eslice, uslice, vslice, wslice, pslice,
+                 *, i1: int, i2: int, dx: float, dt: float, gamma: float,
+                 want_fluxes: bool = False):
+    """One PPM hydro update of a 1D slice (legacy ``Grid_xEulerSweep`` core).
+
+    Composes ``inteuler -> twoshock -> flux_twoshock -> euler`` for the
+    simplest faithful configuration (no gravity / dual-energy / colour /
+    diffusion; PPM + two-shock).  ``dslice`` (density), ``eslice`` (total
+    specific energy), ``uslice``/``vslice``/``wslice`` (velocities) and
+    ``pslice`` (pressure, precomputed by the caller) are length-``idim``
+    sequences with >= 3 ghost cells each side; ``i1``/``i2`` are the 1-based
+    inclusive active range.
+
+    Returns ``(d, e, u, v, w)`` updated lists, plus ``(df, ef, uf)`` if
+    ``want_fluxes`` else ``None``.  See ``enzomodules.examples.ppm_sod`` for a
+    full evolution driver built on this.
+    """
+    return bridge.ppm_sweep_1d(dslice, eslice, uslice, vslice, wslice, pslice,
+                               i1, i2, dx, dt, gamma, want_fluxes=want_fluxes)
+
+
+def ppm_sweep_from_fixture(fx: Fixture):
+    """Run one PPM sweep using a fixture's stored input slice, reproducing how
+    its reference outputs were captured.  Returns ``(d, e, u, v, w)``."""
+    state, _ = bridge.ppm_sweep_1d(
+        fx["dslice_in"], fx["eslice_in"], fx["uslice_in"],
+        fx["vslice_in"], fx["wslice_in"], fx["pslice_in"],
+        int(fx["i1"]), int(fx["i2"]),
+        float(fx["dx"]), float(fx["dt"]), float(fx["gamma"]),
+        want_fluxes=False)
+    return state
+
+
 def twoshock_from_fixture(fx: Fixture) -> Tuple[List[float], List[float]]:
     """Run the kernel using a fixture's stored inputs, reproducing exactly
     how its reference outputs were captured.  Returns the freshly computed
