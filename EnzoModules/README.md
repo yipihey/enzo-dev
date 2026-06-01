@@ -136,10 +136,14 @@ reads the result back.  Certified on this infrastructure so far:
   cloud-in-cell invariants (a particle equidistant from 8 cells splits 1/8
   each, plus linearity, additivity, and mass conservation independent of
   position).
-- **Radiation-transport fields** (`bridge.rt_identify`) — a grid carrying the
-  `kphHI`/`PhotoGamma` rate fields, identified by
-  `grid::IdentifyRadiativeTransferFields` and round-tripped
-  (`tests/test_radiation.py`).
+- **Radiation transport / ray tracing** (`bridge.raytrace_uniform`,
+  `bridge.hi_cross_section`) — fires a photon package through a uniform-HI grid
+  with the legacy ray-tracer (`grid::WalkPhotonPackage`) and reproduces
+  **Beer-Lambert** attenuation `N(L) = N0·exp(-n_HI·σ·L)` to <0.5% across
+  optical depths (σ from Enzo's own `FindCrossSection`), with full absorption
+  in the optically-thick limit.  Also `bridge.rt_identify` — a grid carrying
+  the `kphHI`/`PhotoGamma` rate fields, identified by
+  `grid::IdentifyRadiativeTransferFields` (`tests/test_radiation.py`).
 - **Gravity / Poisson** (`bridge.poisson_solve`) — Enzo's multigrid solver
   (the engine behind `grid::SolveForPotential`).  `tests/test_gravity.py`
   certifies it against manufactured solutions in 1D/2D/3D (recovers
@@ -188,10 +192,8 @@ a reference to diff its own generators against.
 > external data (e.g. cosmological initial-condition files) need that data
 > present, as in a normal Enzo run.
 
-> Still to do: the photon-transport ray-tracer (`grid::WalkPhotonPackage`)
-> needs units, HEALPix ray directions, the species + 7 rate fields, and
-> inter-grid transport — a larger subsystem, now buildable on this fixture;
-> and the multi-dimensional (y/z) hydro sweeps.
+> Still to do: multi-grid (AMR) photon transport across grid boundaries, and
+> the multi-dimensional (y/z) hydro sweeps.
 
 ## The per-kernel workflow
 

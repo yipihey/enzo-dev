@@ -2869,6 +2869,12 @@ int zEulerSweep(int j, int NumberOfSubgrids, fluxes *SubgridFluxes[],
     int    EnzoModulesDepositParticles();   // returns deposited-field cell count
     void   EnzoModulesGetDepositField(double *data);
     double EnzoModulesDepositCellVolume();
+    // Radiative transfer: fire one photon package through this grid and return
+    // its surviving photons / path length (for Beer-Lambert verification).
+    int    EnzoModulesRaytrace(double energy, double photons, double dtphoton,
+                               double lightspeed, int ipix, int hpix_level,
+                               double *photons_final, double *radius_final,
+                               double *kph_sum);
 //------------------------------------------------------------------------
 // Methods for star formation
 //------------------------------------------------------------------------

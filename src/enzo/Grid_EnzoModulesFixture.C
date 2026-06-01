@@ -27,6 +27,7 @@
 #include "Grid.h"
 
 int FindField(int field, int farray[], int numfields);
+FLOAT FindCrossSection(int type, float energy);
 
 int grid::EnzoModulesGridSize()
 {
@@ -161,4 +162,78 @@ double grid::EnzoModulesDepositCellVolume()
   for (int dim = 0; dim < GridRank; dim++)
     vol *= (double)GravitatingMassFieldParticlesCellSize;
   return vol;
+}
+
+/* ---- Radiative transfer (single photon-package ray) ------------------ */
+
+int grid::EnzoModulesRaytrace(double energy, double photons, double dtphoton,
+                              double lightspeed, int ipix, int hpix_level,
+                              double *photons_final, double *radius_final,
+                              double *kph_sum)
+{
+  int size = this->EnzoModulesGridSize();
+
+  /* Periodic so a single-grid ray wraps and stays in the uniform medium. */
+  GravityBoundaryType = TopGridPeriodic;
+
+  /* Every cell of this single grid is owned by this grid. */
+  SubgridMarker = new grid *[size];
+  for (int i = 0; i < size; i++) SubgridMarker[i] = this;
+  HasRadiation = FALSE;
+  MaximumkphIfront = 0.0;
+  IndexOfMaximumkph = 0;
+
+  /* A sentinel head plus one real package, properly linked (the walk checks
+     PreviousPackage->NextPackage == package). */
+  PhotonPackages = new PhotonPackageEntry;
+  PhotonPackages->NextPackage = NULL;
+  PhotonPackages->PreviousPackage = NULL;
+  PhotonPackages->CurrentSource = NULL;
+
+  PhotonPackageEntry *P = new PhotonPackageEntry;
+  P->PreviousPackage = PhotonPackages;
+  P->NextPackage     = NULL;
+  PhotonPackages->NextPackage = P;
+  P->Photons   = photons;
+  P->Type      = 0;                  /* HI-ionizing */
+  P->Energy    = energy;
+  P->CrossSection = FindCrossSection(0, (float)energy);   /* cm^2 */
+  P->EmissionTimeInterval = dtphoton;
+  P->EmissionTime = 0.0;
+  P->CurrentTime  = 0.0;
+  P->Radius       = 0.0;
+  P->ColumnDensity = 0.0;
+  P->ipix  = ipix;
+  P->level = hpix_level;
+  P->CurrentSource = NULL;
+  for (int dim = 0; dim < 3; dim++)
+    P->SourcePosition[dim] = 0.5 * (GridLeftEdge[dim] + GridRightEdge[dim]);
+  P->SourcePositionDiff = 0.0;
+
+  grid  *MoveToGrid = NULL;
+  grid  *Grids0[1]  = { this };
+  int    DeleteMe = FALSE, PauseMe = FALSE, DeltaLevel = 0;
+  float  LightCrossingTime = (float)(2.0 * dtphoton);
+
+  PhotonPackageEntry *PP = P;
+  this->WalkPhotonPackage(&PP, &MoveToGrid, NULL, this, Grids0, 1,
+                          DeleteMe, PauseMe, DeltaLevel,
+                          LightCrossingTime, (float)lightspeed,
+                          hpix_level, /*MinimumPhotonFlux*/ 0.0);
+
+  *photons_final = (double)P->Photons;
+  *radius_final  = (double)P->Radius;
+
+  int kphHINum = FindField(kphHI, FieldType, NumberOfBaryonFields);
+  double s = 0.0;
+  if (kphHINum >= 0)
+    for (int i = 0; i < size; i++) s += (double)BaryonField[kphHINum][i];
+  *kph_sum = s;
+
+  delete P;
+  delete PhotonPackages;
+  delete[] SubgridMarker;
+  SubgridMarker = NULL;
+  PhotonPackages = NULL;
+  return 0;
 }

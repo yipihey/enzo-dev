@@ -378,6 +378,50 @@ def poisson_solve(rhs, dims):
     return [c_sol[i] for i in range(size)], norm.value, mean.value
 
 
+def hi_cross_section(energy):
+    """Enzo's HI photo-ionization cross-section [cm^2] at ``energy`` [eV]
+    (Verner et al. 1996 fits)."""
+    lib = _load_gridlib()
+    if not hasattr(lib, "_xsec_set"):
+        lib.enzomodules_hi_cross_section.restype = ctypes.c_double
+        lib.enzomodules_hi_cross_section.argtypes = [ctypes.c_double]
+        lib._xsec_set = True
+    return lib.enzomodules_hi_cross_section(float(energy))
+
+
+def raytrace_uniform(hi_density, energy=14.0, photons=1e50, path_fraction=0.3,
+                     nx=48, density_units=1.673e-24, length_units=3.086e21,
+                     time_units=3.156e13):
+    """Trace one photon package through a uniform-HI grid (legacy
+    grid::WalkPhotonPackage) and return ``(photons_final, radius, kph_sum)``.
+
+    With ``density_units = m_H`` the HI number density is ``hi_density`` cm^-3.
+    The ray travels ``path_fraction`` box lengths; verify Beer-Lambert with
+    ``photons_final = photons * exp(-hi_density * sigma * radius*length_units)``
+    using :func:`hi_cross_section`.  A negative ``photons_final`` means the ray
+    was optically thick enough to be fully absorbed.
+    """
+    lib = _load_gridlib()
+    if not hasattr(lib, "_ray_set"):
+        d = ctypes.POINTER(ctypes.c_double)
+        lib.enzomodules_raytrace_uniform.restype = ctypes.c_int
+        lib.enzomodules_raytrace_uniform.argtypes = [
+            ctypes.c_int, ctypes.c_double, ctypes.c_double, ctypes.c_double,
+            ctypes.c_double, ctypes.c_double, ctypes.c_double, ctypes.c_double,
+            d, d, d]
+        lib._ray_set = True
+    pf = (ctypes.c_double * 1)()
+    rf = (ctypes.c_double * 1)()
+    ks = (ctypes.c_double * 1)()
+    rc = lib.enzomodules_raytrace_uniform(
+        int(nx), float(density_units), float(length_units), float(time_units),
+        float(hi_density), float(energy), float(photons), float(path_fraction),
+        pf, rf, ks)
+    if rc != 0:
+        raise RuntimeError(f"enzomodules_raytrace_uniform returned {rc}")
+    return pf[0], rf[0], ks[0]
+
+
 def rt_identify(kph_field, nghost=3, dx=0.05):
     """Build a full grid carrying the radiative-transfer rate fields and run
     Enzo's field identification (grid::IdentifyRadiativeTransferFields).
