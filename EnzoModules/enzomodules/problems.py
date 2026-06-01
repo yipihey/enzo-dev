@@ -91,16 +91,19 @@ def _lib():
         lib.enzomodules_session_cycle.argtypes = [ctypes.c_void_p]
         lib.enzomodules_session_compute_dt.argtypes = [ctypes.c_void_p, ctypes.c_int]
         for fn in ("set_boundary", "solve_hydro", "rebuild", "gravity",
-                   "evolve_photons"):
+                   "evolve_photons", "create_fluxes", "update_from_finer",
+                   "finalize_fluxes", "num_grids_on_level"):
             f = getattr(lib, "enzomodules_session_" + fn)
             f.restype = ctypes.c_int
             f.argtypes = [ctypes.c_void_p, ctypes.c_int]
-        for fn in ("set_dt", "advance_time", "update_particles"):
+        for fn in ("set_dt", "advance_time", "update_particles",
+                   "copy_baryon_to_old", "clear_boundary_fluxes"):
             f = getattr(lib, "enzomodules_session_" + fn)
             f.restype = None
         lib.enzomodules_session_set_dt.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_double]
-        lib.enzomodules_session_advance_time.argtypes = [ctypes.c_void_p, ctypes.c_int]
-        lib.enzomodules_session_update_particles.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        for fn in ("advance_time", "update_particles", "copy_baryon_to_old",
+                   "clear_boundary_fluxes"):
+            getattr(lib, "enzomodules_session_" + fn).argtypes = [ctypes.c_void_p, ctypes.c_int]
         lib._problem_set = True
     return lib
 
@@ -337,6 +340,104 @@ class Session:
         RadiativeTransfer is on (library built with -DTRANSFER)."""
         if self._lib.enzomodules_session_evolve_photons(self._h, level):
             raise RuntimeError(f"EvolvePhotons failed (level {level})")
+
+    # --- AMR conservation machinery (for a multi-level EvolveLevel) --------
+    def num_grids_on_level(self, level: int) -> int:
+        """Number of grids on `level` (0 if the level is empty)."""
+        return self._lib.enzomodules_session_num_grids_on_level(self._h, level)
+
+    def create_fluxes(self, level: int = 0) -> None:
+        """Allocate the per-level boundary-flux storage that solve_hydro fills
+        and update_from_finer reads.  Call before solve_hydro when you need
+        conservative AMR flux correction."""
+        if self._lib.enzomodules_session_create_fluxes(self._h, level):
+            raise RuntimeError(f"CreateFluxes failed (level {level})")
+
+    def clear_boundary_fluxes(self, level: int = 0) -> None:
+        """Zero the boundary-flux accumulators on all grids of `level`."""
+        self._lib.enzomodules_session_clear_boundary_fluxes(self._h, level)
+
+    def copy_baryon_to_old(self, level: int = 0) -> None:
+        """Save the current baryon fields as the 'old' fields (time-centering)."""
+        self._lib.enzomodules_session_copy_baryon_to_old(self._h, level)
+
+    def update_from_finer(self, level: int = 0) -> None:
+        """Conservative fine->coarse coupling: project the finer level into this
+        one and correct boundary zones for the flux difference.  Requires
+        create_fluxes + solve_hydro on this level and an evolved level+1."""
+        if self._lib.enzomodules_session_update_from_finer(self._h, level):
+            raise RuntimeError(f"UpdateFromFinerGrids failed (level {level})")
+
+    def finalize_fluxes(self, level: int = 0) -> None:
+        """Release the per-level flux storage allocated by create_fluxes."""
+        if self._lib.enzomodules_session_finalize_fluxes(self._h, level):
+            raise RuntimeError(f"FinalizeFluxes failed (level {level})")
+
+    def evolve_level(self, level: int = 0, dt_above: float = 0.0,
+                     gravity: bool = False, regrid: bool = True) -> int:
+        """A Python re-implementation of Enzo's recursive EvolveLevel, built
+        entirely from the certified session steps.  Mirrors the legacy control
+        flow: clear the boundary fluxes once on entry, then sub-cycle this level
+        until it catches up to its parent's timestep (``dt_above``) -- each
+        sub-cycle solving the grids, recursing into level+1, then applying
+        conservative flux correction + projection (``update_from_finer``) on the
+        way back up, and regridding the finer levels between sub-cycles.
+        ``dt_above == 0`` means a single (top-grid) step.  Returns the number of
+        sub-cycles taken.
+
+        This is the proof that EvolveLevel *can* be written in Python on top of
+        these bridges -- the full AMR time integrator, step by certified step."""
+        self.clear_boundary_fluxes(level)
+        n = 0
+        done = 0.0
+        while True:
+            self.set_boundary(level)                # interpolate from parent
+            dt = self.compute_dt(level)
+            if dt_above > 0.0:
+                dt = min(dt, dt_above - done)        # don't overshoot the parent
+            self.set_dt(level, dt)
+
+            self.create_fluxes(level)               # allocate flux storage
+            if gravity:
+                self.gravity(level)
+            self.copy_baryon_to_old(level)
+            self.solve_hydro(level)                 # fills the boundary fluxes
+            self.update_particles(level)
+            self.advance_time(level)
+
+            last = (dt_above <= 0.0) or (done + dt >= dt_above * (1 - 1e-6))
+
+            if self.num_grids_on_level(level + 1) > 0:
+                self.set_boundary(level)            # refresh before projection
+                self.evolve_level(level + 1, dt_above=dt, gravity=gravity,
+                                  regrid=regrid)
+                self.update_from_finer(level)       # project + flux-correct
+            self.finalize_fluxes(level)
+
+            n += 1
+            done += dt
+            if last or dt <= 0:
+                break
+            if regrid:
+                self.rebuild(level)                 # regrid finer levels
+        return n
+
+    def run_amr(self, gravity: bool = False, regrid: bool = True,
+                max_cycles: int = 100000) -> int:
+        """Top-level driver mirroring EvolveHierarchy: an initial regrid, then
+        repeatedly evolve the whole hierarchy one root step (``evolve_level(0)``)
+        and regrid, until StopTime.  This is a complete AMR run driven from
+        Python on top of the certified legacy steps."""
+        n = 0
+        with _suppress_fd_output():
+            if regrid:
+                self.rebuild(0)
+            while self.time < self.stop_time and n < max_cycles:
+                self.evolve_level(0, gravity=gravity, regrid=regrid)
+                if regrid:
+                    self.rebuild(0)
+                n += 1
+        return n
 
     # --- the default top-level loop (reproduces EvolveHierarchy on level 0)-
     def step(self, level: int = 0) -> float:

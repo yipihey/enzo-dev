@@ -54,6 +54,19 @@ int PrepareDensityField(LevelHierarchyEntry *LevelArray[], int level,
                         TopGridData *MetaData, FLOAT When,
                         SiblingGridList **SiblingGridListStorage);
 int UpdateParticlePositions(grid *Grid);
+int CreateFluxes(HierarchyEntry *Grids[], fluxes **SubgridFluxesEstimate[],
+                 int NumberOfGrids, int NumberOfSubgrids[]);
+int FinalizeFluxes(HierarchyEntry *Grids[], fluxes **SubgridFluxesEstimate[],
+                   int NumberOfGrids, int NumberOfSubgrids[]);
+int UpdateFromFinerGrids(int level, HierarchyEntry *Grids[], int NumberOfGrids,
+                         int NumberOfSubgrids[],
+                         fluxes **SubgridFluxesEstimate[],
+                         LevelHierarchyEntry *SUBlingList[],
+                         TopGridData *MetaData);
+int CreateSUBlingList(TopGridData *MetaData, LevelHierarchyEntry *LevelArray[],
+                      int level, SiblingGridList SiblingList[],
+                      LevelHierarchyEntry ***SUBlingList);
+int DeleteSUBlingList(int NumberOfGrids, LevelHierarchyEntry **SUBlingList);
 class Star;
 int EvolvePhotons(TopGridData *MetaData, LevelHierarchyEntry *LevelArray[],
                   Star *&AllStars, FLOAT GridTime, int level, int LoopTime);
@@ -78,6 +91,10 @@ struct EMProblem {
   std::vector<grid *> grids;
   LevelHierarchyEntry *LevelArray[MAX_DEPTH_OF_HIERARCHY];
   SiblingGridList *SiblingGridListStorage[MAX_DEPTH_OF_HIERARCHY];
+  /* Per-level transient flux state, threaded CreateFluxes -> SolveHydroEquations
+   * -> UpdateFromFinerGrids -> FinalizeFluxes (the AMR conservation machinery). */
+  int *NumberOfSubgrids[MAX_DEPTH_OF_HIERARCHY];
+  fluxes ***SubgridFluxesEstimate[MAX_DEPTH_OF_HIERARCHY];
 };
 
 /* Depth-first walk of the AMR hierarchy collecting every grid on this rank. */
@@ -236,6 +253,8 @@ void *enzomodules_session_init(const char *paramfile)
   for (int l = 0; l < MAX_DEPTH_OF_HIERARCHY; l++) {
     p->LevelArray[l] = NULL;
     p->SiblingGridListStorage[l] = NULL;
+    p->NumberOfSubgrids[l] = NULL;
+    p->SubgridFluxesEstimate[l] = NULL;
   }
 
   char *fname = strdup(paramfile);
@@ -389,18 +408,117 @@ void enzomodules_session_set_dt(void *h, int level, double dt)
   delete[] Grids;
 }
 
-/* Solve the hydro/MHD equations on all grids of `level` (one step). */
+/* Solve the hydro/MHD equations on all grids of `level` (one step).  If
+ * create_fluxes(level) was called first, the boundary fluxes are accumulated
+ * into the per-level flux storage (needed for conservative AMR flux
+ * correction); otherwise no subgrid fluxes are recorded (fine for unigrid). */
 int enzomodules_session_solve_hydro(void *h, int level)
 {
   EMProblem *p = (EMProblem *)h;
   HierarchyEntry **Grids;
   int n = GenerateGridArray(p->LevelArray, level, &Grids);
+  int *nsub = p->NumberOfSubgrids[level];
+  fluxes ***flux = p->SubgridFluxesEstimate[level];
   int rc = 0;
-  for (int i = 0; i < n; i++)
-    if (Grids[i]->GridData->SolveHydroEquations(p->MetaData.CycleNumber, 0,
-                                                NULL, level) == FAIL) rc = 1;
+  for (int i = 0; i < n; i++) {
+    int ns = nsub ? nsub[i] : 0;
+    fluxes **sf = flux ? flux[i] : NULL;
+    if (Grids[i]->GridData->SolveHydroEquations(p->MetaData.CycleNumber, ns,
+                                                sf, level) == FAIL) rc = 1;
+  }
   delete[] Grids;
   return rc;
+}
+
+/* Allocate the per-level boundary-flux storage (one entry per subgrid) that
+ * SolveHydroEquations accumulates into and UpdateFromFinerGrids reads.  Call
+ * before solve_hydro(level) when you need conservative AMR flux correction. */
+int enzomodules_session_create_fluxes(void *h, int level)
+{
+  EMProblem *p = (EMProblem *)h;
+  HierarchyEntry **Grids;
+  int n = GenerateGridArray(p->LevelArray, level, &Grids);
+  delete[] p->NumberOfSubgrids[level];
+  delete[] p->SubgridFluxesEstimate[level];
+  p->NumberOfSubgrids[level] = new int[n > 0 ? n : 1];
+  p->SubgridFluxesEstimate[level] = new fluxes **[n > 0 ? n : 1];
+  int rc = CreateFluxes(Grids, p->SubgridFluxesEstimate[level], n,
+                        p->NumberOfSubgrids[level]);
+  delete[] Grids;
+  return (rc == FAIL) ? 1 : 0;
+}
+
+/* Conservative fine->coarse coupling for `level`: project the finer-level
+ * solution into these grids and correct their boundary zones for the flux
+ * difference (the recursive heart of EvolveLevel).  Requires create_fluxes +
+ * solve_hydro on this level and a fully evolved level+1. */
+int enzomodules_session_update_from_finer(void *h, int level)
+{
+  EMProblem *p = (EMProblem *)h;
+  HierarchyEntry **Grids;
+  int n = GenerateGridArray(p->LevelArray, level, &Grids);
+  if (p->SiblingGridListStorage[level] == NULL)
+    enzomodules_session_set_boundary(h, level);
+  LevelHierarchyEntry **SUBlingList = new LevelHierarchyEntry *[n > 0 ? n : 1];
+  CreateSUBlingList(&p->MetaData, p->LevelArray, level,
+                    p->SiblingGridListStorage[level], &SUBlingList);
+  int rc = UpdateFromFinerGrids(level, Grids, n, p->NumberOfSubgrids[level],
+                                p->SubgridFluxesEstimate[level], SUBlingList,
+                                &p->MetaData);
+  DeleteSUBlingList(n, SUBlingList);
+  delete[] Grids;
+  return (rc == FAIL) ? 1 : 0;
+}
+
+/* Release the per-level flux storage allocated by create_fluxes. */
+int enzomodules_session_finalize_fluxes(void *h, int level)
+{
+  EMProblem *p = (EMProblem *)h;
+  if (p->SubgridFluxesEstimate[level] == NULL) return 0;
+  HierarchyEntry **Grids;
+  int n = GenerateGridArray(p->LevelArray, level, &Grids);
+  int rc = FinalizeFluxes(Grids, p->SubgridFluxesEstimate[level], n,
+                          p->NumberOfSubgrids[level]);
+  delete[] Grids;
+  delete[] p->NumberOfSubgrids[level];
+  delete[] p->SubgridFluxesEstimate[level];
+  p->NumberOfSubgrids[level] = NULL;
+  p->SubgridFluxesEstimate[level] = NULL;
+  return (rc == FAIL) ? 1 : 0;
+}
+
+/* Save the current baryon fields as the "old" fields (time-centering for the
+ * gravity source term and the RK schemes). */
+void enzomodules_session_copy_baryon_to_old(void *h, int level)
+{
+  EMProblem *p = (EMProblem *)h;
+  HierarchyEntry **Grids;
+  int n = GenerateGridArray(p->LevelArray, level, &Grids);
+  for (int i = 0; i < n; i++)
+    Grids[i]->GridData->CopyBaryonFieldToOldBaryonField();
+  delete[] Grids;
+}
+
+/* Zero the boundary-flux accumulators on all grids of `level` (done once per
+ * level step before the subgrid sub-cycles accumulate into them). */
+void enzomodules_session_clear_boundary_fluxes(void *h, int level)
+{
+  EMProblem *p = (EMProblem *)h;
+  HierarchyEntry **Grids;
+  int n = GenerateGridArray(p->LevelArray, level, &Grids);
+  for (int i = 0; i < n; i++)
+    Grids[i]->GridData->ClearBoundaryFluxes();
+  delete[] Grids;
+}
+
+/* Number of grids on `level` (so a Python EvolveLevel can iterate/recurse). */
+int enzomodules_session_num_grids_on_level(void *h, int level)
+{
+  EMProblem *p = (EMProblem *)h;
+  HierarchyEntry **Grids;
+  int n = GenerateGridArray(p->LevelArray, level, &Grids);
+  delete[] Grids;
+  return n;
 }
 
 /* Advance each grid's time by its dtFixed and bump the cycle counter. */
@@ -427,8 +545,11 @@ int enzomodules_session_rebuild(void *h, int level)
 void enzomodules_free_problem(void *h)
 {
   EMProblem *p = (EMProblem *)h;
-  for (int l = 0; l < MAX_DEPTH_OF_HIERARCHY; l++)
+  for (int l = 0; l < MAX_DEPTH_OF_HIERARCHY; l++) {
     delete[] p->SiblingGridListStorage[l];
+    delete[] p->NumberOfSubgrids[l];
+    delete[] p->SubgridFluxesEstimate[l];
+  }
   for (size_t i = 0; i < p->grids.size(); i++)
     delete p->grids[i];               /* frees BaryonField / particle arrays */
   delete p;                           /* (subgrid HierarchyEntry nodes leak;

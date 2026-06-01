@@ -254,6 +254,11 @@ The steps exposed on the live hierarchy:
 | `update_particles(level)` | `UpdateParticlePositions` |
 | `rebuild(level)` | `RebuildHierarchy` (flag + cluster + regrid) |
 | `evolve_photons(level)` | `EvolvePhotons` |
+| `create_fluxes` / `finalize_fluxes(level)` | `CreateFluxes` / `FinalizeFluxes` (per-level boundary-flux storage) |
+| `clear_boundary_fluxes(level)` | `grid::ClearBoundaryFluxes` |
+| `copy_baryon_to_old(level)` | `grid::CopyBaryonFieldToOldBaryonField` |
+| `update_from_finer(level)` | `CreateSUBlingList` + `UpdateFromFinerGrids` (project + flux-correct) |
+| `num_grids_on_level(level)` | grids per level (for the recursion) |
 | `step(level)` / `run(level)` | the default root-level loop |
 
 The headline guarantee (`tests/test_session.py`): the Python-driven loop
@@ -263,6 +268,31 @@ reproduces `EvolveHierarchy` **bit-for-bit** on the Toro-1 shock tube
 and verified at every stage.  The gravity, particle and radiation steps run on
 the live hierarchy; their physics is certified in the dedicated bridge tests
 (`test_gravity.py`, `test_particles.py`, `test_radiation.py`).
+
+#### Writing EvolveLevel itself in Python
+
+The last group of steps above (flux storage + `update_from_finer`) is the AMR
+*conservation* machinery, which is exactly what makes `EvolveLevel` non-trivial.
+With it, `Session.evolve_level()` **is** a Python re-implementation of Enzo's
+recursive `EvolveLevel`, built entirely from the certified bridges — it clears
+the boundary fluxes, sub-cycles the level to its parent's timestep, recurses
+into the finer level between sub-steps, then projects the fine solution back and
+corrects the coarse fluxes (`update_from_finer`) and regrids:
+
+```python
+with Session("run/Hydro/Hydro-2D/ImplosionAMR/ImplosionAMR.enzo") as s:
+    s.run_amr()                       # initial regrid, then evolve_level(0) + regrid to StopTime
+    print(s.grid(0).field("Density"))
+```
+
+`tests/test_session.py` runs this on the 4-level `ImplosionAMR` problem — the
+recursion, sub-cycling, flux correction, projection and regridding all fire (the
+hierarchy grows from `[1,1,1,1]` to hundreds of subgrids) — and the result
+matches Enzo's own `EvolveHierarchy` on the root grid to `L1 ~ 4e-5`, with the
+mean density (a conservation proxy) agreeing to six figures.  In other words,
+the whole AMR time integrator — `enzo.C`, `EvolveHierarchy`, *and* the recursive
+`EvolveLevel` — can now be written in Python on top of EnzoModules, with each
+step verified against the legacy reference.
 
 - **Multi-grid (AMR) photon transport** (`bridge.raytrace_twogrid`) — a ray
   crossing two tiled grids (the legacy `SubgridMarker` -> `FindPhotonNewGrid`

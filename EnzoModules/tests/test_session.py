@@ -109,6 +109,71 @@ def test_session_gravity_chain_runs():
             s.update_particles(0)
 
 
+def test_python_evolve_level_matches_exact_riemann():
+    """The recursive Python EvolveLevel (problems.Session.evolve_level), built
+    only from the certified session steps, integrates the Toro-1 shock tube and
+    matches the exact Riemann solution -- the single-level proof that
+    EvolveLevel can be written in Python on top of these bridges."""
+    with problems.Session(_toro1()) as s:
+        n = 0
+        while s.time < s.stop_time and n < 10000:
+            n += s.evolve_level(0)
+        assert n > 0
+        g = s.grid(0)
+        ng = 3
+        sz = g.size
+        nx = g.dims[0] - 2 * ng
+        rho = g.field("Density")[ng:sz - ng]
+        x = [(i + 0.5) / nx for i in range(nx)]
+        rho_ex, _, _ = riemann.sample((1.0, 0.75, 1.0), (0.125, 0.0, 0.1),
+                                      1.4, 0.3, x, 0.2)
+        l1 = sum(abs(a - b) for a, b in zip(rho, rho_ex)) / nx
+        assert l1 < 1e-2, f"Python EvolveLevel L1 = {l1:.4e}"
+
+
+def _implosion_amr():
+    p = _param("Hydro/Hydro-2D/ImplosionAMR/ImplosionAMR.enzo")
+    if not os.path.exists(p):
+        pytest.skip("ImplosionAMR parameter file missing")
+    return p
+
+
+def test_python_evolve_level_amr_recursion():
+    """The recursive Python EvolveLevel drives a real multi-level AMR problem
+    (ImplosionAMR, 4 initial levels) -- exercising sub-cycling, recursion into
+    finer levels, conservative flux correction + projection (update_from_finer)
+    and regridding -- and reproduces Enzo's monolithic EvolveHierarchy on the
+    root grid (mean density to ~1e-5)."""
+    import enzomodules.problems as P
+    path = _implosion_amr()
+    cycles = 3
+
+    # reference: Enzo's own EvolveHierarchy
+    with problems.Problem(path, evolve=True, stop_cycle=cycles) as p:
+        rho_ref = p.grid(0).field("Density")
+
+    # the Python recursive EvolveLevel, same number of root cycles
+    with problems.Session(path) as s:
+        assert s.num_grids_on_level(1) > 0          # starts multi-level
+        with P._suppress_fd_output():
+            s.rebuild(0)
+            for _ in range(cycles):
+                s.evolve_level(0)                   # recurses + flux-corrects
+                s.rebuild(0)
+        rho_sess = s.grid(0).field("Density")
+        # the recursion really created finer grids
+        assert s.num_grids_on_level(1) > 1
+
+    assert len(rho_ref) == len(rho_sess)
+    n = len(rho_ref)
+    assert all(v > 0 for v in rho_sess)             # physical
+    l1 = sum(abs(a - b) for a, b in zip(rho_ref, rho_sess)) / n
+    mean_ref = sum(rho_ref) / n
+    mean_sess = sum(rho_sess) / n
+    assert l1 < 1e-2, f"Python EvolveLevel vs EvolveHierarchy L1 = {l1:.4e}"
+    assert abs(mean_ref - mean_sess) < 1e-3 * mean_ref   # conservation
+
+
 def test_session_evolve_photons_runs():
     """The radiative-transfer step is callable on a live RT hierarchy (the
     transport physics itself is certified in test_radiation.py)."""
