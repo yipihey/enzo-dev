@@ -94,6 +94,48 @@ def test_flag_shear():
     assert all(abs(c - nx // 2) <= 1 for c in cols)   # at the shear interface
 
 
+def test_flag_must_refine_region():
+    """Geometric must-refine-region flagging (method 12, 3D) flags exactly the
+    cells inside the requested box."""
+    n = 12
+    dim = n + 2 * NG
+    flagging, count = bridge.flag_region((dim, dim, dim),
+                                         (0.25, 0.25, 0.25), (0.5, 0.5, 0.5),
+                                         dx=1.0 / n)
+    # box [0.25,0.5] at n=12 -> active cells 3,4,5 in each dim -> 3^3 = 27
+    assert count == 27
+    xs = sorted(set(i - NG for k in range(NG, dim - NG)
+                    for j in range(NG, dim - NG)
+                    for i in range(NG, dim - NG)
+                    if flagging[i + dim * (j + dim * k)]))
+    assert xs == [3, 4, 5]
+
+
+def test_flag_jeans():
+    """Jeans-length flagging (method 6): a dense clump is under-resolved and
+    flagged; diffuse gas is well-resolved and not flagged."""
+    import math
+    nx = 32
+    dimx = nx + 2 * NG
+    DU, LU, TU = 1.673e-24, 3.086e21, 3.156e13
+    mh, kB, gamma, mu = 1.673e-24, 1.381e-16, 5.0 / 3.0, 0.6
+    temp_units = mh * (LU / TU) ** 2 / kB
+    eint = 50.0 / (temp_units * (gamma - 1) * mu)
+    energy = [eint] * dimx
+    clump = [1e4 if abs((i - NG) - 16) < 4 else 1.0 for i in range(dimx)]
+    fl, count = bridge.flag_jeans(1, (dimx, 1, 1), clump, energy,
+                                  density_units=DU, length_units=LU,
+                                  time_units=TU, dx=1.0 / nx)
+    flagged = [i - NG for i in range(NG, dimx - NG) if fl[i]]
+    assert count > 0
+    assert all(13 <= c <= 19 for c in flagged)        # the dense clump
+    # diffuse uniform gas: nothing under-resolved
+    fl2, count2 = bridge.flag_jeans(1, (dimx, 1, 1), [1.0] * dimx, energy,
+                                    density_units=DU, length_units=LU,
+                                    time_units=TU, dx=1.0 / nx)
+    assert count2 == 0
+
+
 def _block(fl, dimx, i0, i1, j0, j1):
     for j in range(j0, j1):
         for i in range(i0, i1):

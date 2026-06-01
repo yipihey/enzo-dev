@@ -473,6 +473,63 @@ def flag_cells(rank, dims, density, method=FLAG_SLOPE, threshold=0.3,
     return [c_flag[i] for i in range(size)], c_count.value
 
 
+def flag_region(dims, region_left, region_right, dx=1.0):
+    """AMR must-refine-region flagging (CellFlaggingMethod 12, 3D only) -- flag
+    every cell inside the box [region_left, region_right] (domain coords).
+    Returns ``(flagging, count)``."""
+    lib = _load_gridlib()
+    if not hasattr(lib, "_region_set"):
+        d = ctypes.POINTER(ctypes.c_double)
+        ip = ctypes.POINTER(ctypes.c_int)
+        lib.enzomodules_flag_region.restype = ctypes.c_int
+        lib.enzomodules_flag_region.argtypes = [
+            ctypes.c_int, ip, ctypes.c_double, d, d, ip, ip]
+        lib._region_set = True
+    c_dims = (ctypes.c_int * 3)(int(dims[0]), int(dims[1]), int(dims[2]))
+    rl = (ctypes.c_double * 3)(*[float(x) for x in region_left])
+    rr = (ctypes.c_double * 3)(*[float(x) for x in region_right])
+    size = dims[0] * dims[1] * dims[2]
+    c_flag = (ctypes.c_int * size)()
+    c_count = ctypes.c_int(0)
+    rc = lib.enzomodules_flag_region(3, c_dims, float(dx), rl, rr, c_flag,
+                                     ctypes.byref(c_count))
+    if rc != 0:
+        raise RuntimeError(f"enzomodules_flag_region returned {rc}")
+    return [c_flag[i] for i in range(size)], c_count.value
+
+
+def flag_jeans(rank, dims, density, energy, safety=4.0,
+               density_units=1.673e-24, length_units=3.086e21,
+               time_units=3.156e13, dx=1.0):
+    """AMR Jeans-length flagging (CellFlaggingMethod 6) -- refine where the
+    Jeans length is under-resolved (dense/cold gas).  Returns
+    ``(flagging, count)``."""
+    lib = _load_gridlib()
+    if not hasattr(lib, "_jeans_set"):
+        d = ctypes.POINTER(ctypes.c_double)
+        ip = ctypes.POINTER(ctypes.c_int)
+        lib.enzomodules_flag_jeans.restype = ctypes.c_int
+        lib.enzomodules_flag_jeans.argtypes = [
+            ctypes.c_int, ip, ctypes.c_double, d, d, ctypes.c_double,
+            ctypes.c_double, ctypes.c_double, ctypes.c_double, ip, ip]
+        lib._jeans_set = True
+    c_dims = (ctypes.c_int * 3)(int(dims[0]),
+                                int(dims[1]) if len(dims) > 1 else 1,
+                                int(dims[2]) if len(dims) > 2 else 1)
+    size = len(density)
+    c_d = (ctypes.c_double * size)(*[float(x) for x in density])
+    c_e = (ctypes.c_double * size)(*[float(x) for x in energy])
+    c_flag = (ctypes.c_int * size)()
+    c_count = ctypes.c_int(0)
+    rc = lib.enzomodules_flag_jeans(int(rank), c_dims, float(dx), c_d, c_e,
+                                    float(safety), float(density_units),
+                                    float(length_units), float(time_units),
+                                    c_flag, ctypes.byref(c_count))
+    if rc != 0:
+        raise RuntimeError(f"enzomodules_flag_jeans returned {rc}")
+    return [c_flag[i] for i in range(size)], c_count.value
+
+
 def cluster(rank, dims, flagging, dx=1.0, max_sub=200):
     """Cluster a flagging field into rectangular subgrids (Berger-Rigoutsos
     via ProtoSubgrid + IdentifyNewSubgridsBySignature).

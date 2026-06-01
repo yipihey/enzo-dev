@@ -21,6 +21,7 @@
 #include "macros_and_parameters.h"
 #include "typedefs.h"
 #include "global_data.h"
+#include "units.h"
 #include "Fluxes.h"
 #include "GridList.h"
 #include "ExternalBoundary.h"
@@ -100,6 +101,87 @@ int enzomodules_flag_cells(int rank, int dims[], double dx, int method,
   g.EnzoModulesSetField(g.EnzoModulesFieldIndex(Velocity1),   u);
   g.EnzoModulesSetField(g.EnzoModulesFieldIndex(Velocity2),   v);
   g.EnzoModulesSetField(g.EnzoModulesFieldIndex(Velocity3),   w);
+
+  g.ClearFlaggingField();
+  int count = 0;
+  g.SetFlaggingField(count, 0);
+  g.EnzoModulesGetFlagging(out_flag);
+  *out_count = count;
+  return 0;
+}
+
+/* Flag cells in a must-refine region (geometric criterion, method 12).
+ * region_left/right are the box edges in domain coordinates. */
+int enzomodules_flag_region(int rank, int dims[], double dx,
+                            const double *region_left,
+                            const double *region_right,
+                            int *out_flag, int *out_count)
+{
+  TopGridData MetaData;
+  SetDefaultGlobalValues(MetaData);
+  ComovingCoordinates = 0;
+  NumberOfGhostZones  = 3;
+  for (int m = 0; m < MAX_FLAGGING_METHODS; m++)
+    CellFlaggingMethod[m] = INT_UNDEFINED;
+  CellFlaggingMethod[0] = 12;                 /* must-refine region */
+  MustRefineRegionMinRefinementLevel = 1;     /* > our level (0) */
+  for (int d = 0; d < MAX_DIMENSION; d++) {
+    MustRefineRegionLeftEdge[d]  = (d < rank) ? (FLOAT)region_left[d]  : (FLOAT)0.0;
+    MustRefineRegionRightEdge[d] = (d < rank) ? (FLOAT)region_right[d] : (FLOAT)1.0;
+  }
+
+  grid g;
+  FLOAT left[3], right[3];
+  em_edges(rank, dims, dx, left, right);
+  int ftypes[1] = { Density };
+  g.EnzoModulesSetupGrid(rank, dims, left, right, 1, ftypes, 0.0);
+  std::vector<double> ones(g.EnzoModulesGridSize(), 1.0);
+  g.EnzoModulesSetField(g.EnzoModulesFieldIndex(Density), ones.data());
+
+  g.ClearFlaggingField();
+  int count = 0;
+  g.SetFlaggingField(count, 0);
+  g.EnzoModulesGetFlagging(out_flag);
+  *out_count = count;
+  return 0;
+}
+
+/* Flag cells by Jeans length (method 6): refine where the Jeans length is
+ * under-resolved (dense/cold gas).  units are physical cgs scalings. */
+int enzomodules_flag_jeans(int rank, int dims[], double dx,
+                           const double *density, const double *energy,
+                           double safety, double density_units,
+                           double length_units, double time_units,
+                           int *out_flag, int *out_count)
+{
+  TopGridData MetaData;
+  SetDefaultGlobalValues(MetaData);
+  ComovingCoordinates = 0;
+  NumberOfGhostZones  = 3;
+  DualEnergyFormalism = 0;
+  Gamma               = 5.0 / 3.0;
+  Mu                  = 0.6;
+  MultiSpecies        = 0;
+  RefineByJeansLengthSafetyFactor = safety;
+  GlobalDensityUnits = density_units;
+  GlobalLengthUnits  = length_units;
+  GlobalTimeUnits    = time_units;
+  GlobalMassUnits    = density_units * length_units * length_units * length_units;
+  for (int m = 0; m < MAX_FLAGGING_METHODS; m++)
+    CellFlaggingMethod[m] = INT_UNDEFINED;
+  CellFlaggingMethod[0] = 6;                  /* refine by Jeans length */
+
+  grid g;
+  FLOAT left[3], right[3];
+  em_edges(rank, dims, dx, left, right);
+  int ftypes[5] = { Density, TotalEnergy, Velocity1, Velocity2, Velocity3 };
+  g.EnzoModulesSetupGrid(rank, dims, left, right, 5, ftypes, 0.0);
+  std::vector<double> zero(g.EnzoModulesGridSize(), 0.0);
+  g.EnzoModulesSetField(g.EnzoModulesFieldIndex(Density),     density);
+  g.EnzoModulesSetField(g.EnzoModulesFieldIndex(TotalEnergy), energy);
+  g.EnzoModulesSetField(g.EnzoModulesFieldIndex(Velocity1),   zero.data());
+  g.EnzoModulesSetField(g.EnzoModulesFieldIndex(Velocity2),   zero.data());
+  g.EnzoModulesSetField(g.EnzoModulesFieldIndex(Velocity3),   zero.data());
 
   g.ClearFlaggingField();
   int count = 0;

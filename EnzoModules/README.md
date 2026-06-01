@@ -167,8 +167,9 @@ This is the foundation for wrapping chemistry and the photon transport solver
   divergence of the face-centered field stays at machine zero under evolution.
 - **AMR control** (`bridge.flag_cells`, `bridge.cluster`) -- cell flagging
   via the real `grid::SetFlaggingField` dispatch (any CellFlaggingMethod), with
-  the hydro criteria certified: slope, baryon-mass/overdensity, second
-  derivative, and shear (`tests/test_amr.py`); plus Berger-Rigoutsos clustering
+  the criteria certified: slope, baryon-mass/overdensity, second derivative,
+  shear, must-refine region (geometric), and Jeans length (gravity)
+  (`tests/test_amr.py`); plus Berger-Rigoutsos clustering
   of flagged cells into child grids (`ProtoSubgrid` +
   `IdentifyNewSubgridsBySignature`).  Other criteria (particle mass, Jeans,
   cooling time, optical depth, resistive length, metallicity, must-refine
