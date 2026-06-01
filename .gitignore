@@ -72,3 +72,6 @@ EnzoModules/*.egg-info/
 # Enzo rate-table dumps written by InitializeRateData during chemistry tests
 EnzoModules/*.out
 EnzoModules/RT_spectrum_table.dat
+
+# Agent worktrees
+.claude/worktrees/

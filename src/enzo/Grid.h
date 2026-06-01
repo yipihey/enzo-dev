@@ -2875,6 +2875,12 @@ int zEulerSweep(int j, int NumberOfSubgrids, fluxes *SubgridFluxes[],
                                double lightspeed, int ipix, int hpix_level,
                                double *photons_final, double *radius_final,
                                double *kph_sum);
+    // Multi-grid photon transport: hand a ray from this grid into a sibling.
+    int    EnzoModulesRaytraceTwoGrid(grid *gB, double energy, double photons,
+                                      double dtphoton, double lightspeed,
+                                      int ipix, int hpix_level,
+                                      double *photons_final, double *radius_final,
+                                      int *grids_visited);
 //------------------------------------------------------------------------
 // Methods for star formation
 //------------------------------------------------------------------------

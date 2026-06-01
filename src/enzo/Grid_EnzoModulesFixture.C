@@ -59,6 +59,12 @@ int grid::EnzoModulesSetupGrid(int rank, int dims[], FLOAT left[], FLOAT right[]
 
   AllocateGrids();           /* allocates + zeroes BaryonField[0..n-1] */
 
+  /* Hydro-method grid members are normally copied from TopGridData during
+     InitializeNew; a bare fixture grid must set them explicitly. */
+  PPMFlatteningParameter = 0;
+  PPMDiffusionParameter  = 0;
+  PPMSteepeningParameter = 0;
+
   dtFixed = dt;
   Time = 0.0;
   OldTime = 0.0;
@@ -235,5 +241,100 @@ int grid::EnzoModulesRaytrace(double energy, double photons, double dtphoton,
   delete[] SubgridMarker;
   SubgridMarker = NULL;
   PhotonPackages = NULL;
+  return 0;
+}
+
+/* Multi-grid photon transport: inject a ray into this grid (gA) and let it
+ * cross into the sibling gB, mirroring Enzo's inter-grid handoff
+ * (SubgridMarker -> FindPhotonNewGrid -> move package to the new grid's list).
+ * Verifies AMR photon transport: a ray traversing two tiled grids attenuates
+ * exactly as one grid of the combined length. */
+int grid::EnzoModulesRaytraceTwoGrid(grid *gB, double energy, double photons,
+                                     double dtphoton, double lightspeed,
+                                     int ipix, int hpix_level,
+                                     double *photons_final, double *radius_final,
+                                     int *grids_visited)
+{
+  int sizeA = this->EnzoModulesGridSize();
+  int sizeB = gB->EnzoModulesGridSize();
+  FLOAT zero_offset[MAX_DIMENSION] = { 0.0, 0.0, 0.0 };
+
+  this->GravityBoundaryType = SubGridIsolated;
+  gB->GravityBoundaryType   = SubGridIsolated;
+
+  /* Every cell -> its own grid, then cells overlapping the sibling -> sibling
+     (this is how a ray at the shared face is told to move grids). */
+  this->SubgridMarker = new grid *[sizeA];
+  for (int i = 0; i < sizeA; i++) this->SubgridMarker[i] = this;
+  gB->SubgridMarker = new grid *[sizeB];
+  for (int i = 0; i < sizeB; i++) gB->SubgridMarker[i] = gB;
+  this->SetSubgridMarkerFromSibling(gB, zero_offset);
+  gB->SetSubgridMarkerFromSibling(this, zero_offset);
+
+  this->HasRadiation = FALSE; gB->HasRadiation = FALSE;
+  this->MaximumkphIfront = 0.0; this->IndexOfMaximumkph = 0;
+  gB->MaximumkphIfront = 0.0;   gB->IndexOfMaximumkph = 0;
+
+  this->PhotonPackages = new PhotonPackageEntry;
+  this->PhotonPackages->NextPackage = NULL;
+  this->PhotonPackages->PreviousPackage = NULL;
+  gB->PhotonPackages = new PhotonPackageEntry;
+  gB->PhotonPackages->NextPackage = NULL;
+  gB->PhotonPackages->PreviousPackage = NULL;
+
+  PhotonPackageEntry *P = new PhotonPackageEntry;
+  P->PreviousPackage = this->PhotonPackages;
+  P->NextPackage = NULL;
+  this->PhotonPackages->NextPackage = P;
+  P->Photons = photons; P->Type = 0; P->Energy = energy;
+  P->CrossSection = FindCrossSection(0, (float)energy);
+  P->EmissionTimeInterval = dtphoton;
+  P->EmissionTime = 0.0; P->CurrentTime = 0.0; P->Radius = 0.0;
+  P->ColumnDensity = 0.0; P->ipix = ipix; P->level = hpix_level;
+  P->CurrentSource = NULL; P->SourcePositionDiff = 0.0;
+  P->SourcePosition[0] = GridLeftEdge[0] + 0.1 * (GridRightEdge[0] - GridLeftEdge[0]);
+  P->SourcePosition[1] = 0.5 * (GridLeftEdge[1] + GridRightEdge[1]);
+  P->SourcePosition[2] = 0.5 * (GridLeftEdge[2] + GridRightEdge[2]);
+
+  grid *current = this;
+  PhotonPackageEntry *PP = P;
+  int visited = 1;
+  float LightCrossingTime = (float)(4.0 * dtphoton);
+
+  for (int iter = 0; iter < 20; iter++) {
+    grid *MoveToGrid = NULL;
+    int DeleteMe = FALSE, PauseMe = FALSE, DeltaLevel = 0;
+    grid *Grids0[2] = { this, gB };
+    current->WalkPhotonPackage(&PP, &MoveToGrid, NULL, current, Grids0, 2,
+                               DeleteMe, PauseMe, DeltaLevel,
+                               LightCrossingTime, (float)lightspeed,
+                               hpix_level, 0.0);
+    if (DeleteMe || P->Photons <= 0) break;
+    if (MoveToGrid != NULL && MoveToGrid != current) {
+      /* relink P out of `current` and into MoveToGrid's list */
+      if (P->PreviousPackage) P->PreviousPackage->NextPackage = P->NextPackage;
+      if (P->NextPackage) P->NextPackage->PreviousPackage = P->PreviousPackage;
+      P->NextPackage = MoveToGrid->PhotonPackages->NextPackage;
+      P->PreviousPackage = MoveToGrid->PhotonPackages;
+      if (MoveToGrid->PhotonPackages->NextPackage)
+        MoveToGrid->PhotonPackages->NextPackage->PreviousPackage = P;
+      MoveToGrid->PhotonPackages->NextPackage = P;
+      current = MoveToGrid;
+      PP = P;
+      visited++;
+    } else {
+      break;
+    }
+  }
+
+  *photons_final = (double)P->Photons;
+  *radius_final  = (double)P->Radius;
+  *grids_visited = visited;
+
+  delete P;
+  delete this->PhotonPackages; this->PhotonPackages = NULL;
+  delete gB->PhotonPackages;   gB->PhotonPackages = NULL;
+  delete[] this->SubgridMarker; this->SubgridMarker = NULL;
+  delete[] gB->SubgridMarker;   gB->SubgridMarker = NULL;
   return 0;
 }

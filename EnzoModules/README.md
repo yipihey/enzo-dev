@@ -192,8 +192,15 @@ a reference to diff its own generators against.
 > external data (e.g. cosmological initial-condition files) need that data
 > present, as in a normal Enzo run.
 
-> Still to do: multi-grid (AMR) photon transport across grid boundaries, and
-> the multi-dimensional (y/z) hydro sweeps.
+- **Multi-grid (AMR) photon transport** (`bridge.raytrace_twogrid`) — a ray
+  crossing two tiled grids (the legacy `SubgridMarker` -> `FindPhotonNewGrid`
+  handoff) attenuates exactly as one grid of the combined length
+  (`tests/test_radiation.py`).
+- **Multi-dimensional PPM** (`bridge.ppm_hydro_step`) — the full
+  `grid::SolveHydroEquations`, which runs the x/y/z Euler sweeps.
+  `tests/test_ppm_hydro.py` certifies the y-sweep against the x-sweep by
+  rotational symmetry (profiles identical to <1e-10) and matches the exact
+  Riemann solution.
 
 ## The per-kernel workflow
 

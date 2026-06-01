@@ -422,6 +422,76 @@ def raytrace_uniform(hi_density, energy=14.0, photons=1e50, path_fraction=0.3,
     return pf[0], rf[0], ks[0]
 
 
+def ppm_hydro_step(rank, dims, d, e, u, v, w, dx, dt, gamma):
+    """One full multi-dimensional PPM hydro step (legacy
+    grid::SolveHydroEquations -> x/y/z Euler sweeps).
+
+    Builds a minimal Enzo grid of the given ``rank`` and active+ghost ``dims``
+    (domain edges ``[0, dims[k]*dx]``), sets the Density/TotalEnergy/Velocity
+    fields, takes one in-place PPM_DirectEuler step over ``dt``, and reads the
+    fields back.  ``d`` (density), ``e`` (specific *total* energy = internal +
+    0.5 v^2), ``u``/``v``/``w`` (Velocity1/2/3) are flat row-major lists of
+    length ``prod(dims)`` (INCLUDING ghost zones).  Returns updated
+    ``(d, e, u, v, w)`` as new lists.
+    """
+    lib = _load_gridlib()
+    if not hasattr(lib, "_ppm_step_set"):
+        d_p = ctypes.POINTER(ctypes.c_double)
+        ip = ctypes.POINTER(ctypes.c_int)
+        lib.enzomodules_ppm_hydro_step.restype = ctypes.c_int
+        lib.enzomodules_ppm_hydro_step.argtypes = [
+            ctypes.c_int, ip, ctypes.c_double, ctypes.c_double, ctypes.c_double,
+            d_p, d_p, d_p, d_p, d_p]
+        lib._ppm_step_set = True
+    c_dims = (ctypes.c_int * 3)(int(dims[0]),
+                                int(dims[1]) if len(dims) > 1 else 1,
+                                int(dims[2]) if len(dims) > 2 else 1)
+    size = len(d)
+    cd = (ctypes.c_double * size)(*[float(x) for x in d])
+    ce = (ctypes.c_double * size)(*[float(x) for x in e])
+    cu = (ctypes.c_double * size)(*[float(x) for x in u])
+    cv = (ctypes.c_double * size)(*[float(x) for x in v])
+    cw = (ctypes.c_double * size)(*[float(x) for x in w])
+    rc = lib.enzomodules_ppm_hydro_step(int(rank), c_dims, float(dx),
+                                        float(dt), float(gamma),
+                                        cd, ce, cu, cv, cw)
+    if rc != 0:
+        raise RuntimeError(f"enzomodules_ppm_hydro_step returned {rc}")
+    return list(cd), list(ce), list(cu), list(cv), list(cw)
+
+
+def raytrace_twogrid(hi_density, energy=14.0, photons=1e50, path_fraction=0.6,
+                     nx=32, density_units=1.673e-24, length_units=3.086e21,
+                     time_units=3.156e13):
+    """Multi-grid (AMR) photon transport: trace a ray across two grids tiling
+    the domain in x (legacy SubgridMarker -> FindPhotonNewGrid handoff).
+
+    Returns ``(photons_final, radius, grids_visited)``.  ``grids_visited == 2``
+    means the ray crossed the grid boundary; attenuation should still obey
+    Beer-Lambert for the total path (verifying continuity across grids).
+    """
+    lib = _load_gridlib()
+    if not hasattr(lib, "_ray2_set"):
+        d = ctypes.POINTER(ctypes.c_double)
+        ip = ctypes.POINTER(ctypes.c_int)
+        lib.enzomodules_raytrace_twogrid.restype = ctypes.c_int
+        lib.enzomodules_raytrace_twogrid.argtypes = [
+            ctypes.c_int, ctypes.c_double, ctypes.c_double, ctypes.c_double,
+            ctypes.c_double, ctypes.c_double, ctypes.c_double, ctypes.c_double,
+            d, d, ip]
+        lib._ray2_set = True
+    pf = (ctypes.c_double * 1)()
+    rf = (ctypes.c_double * 1)()
+    gv = (ctypes.c_int * 1)()
+    rc = lib.enzomodules_raytrace_twogrid(
+        int(nx), float(density_units), float(length_units), float(time_units),
+        float(hi_density), float(energy), float(photons), float(path_fraction),
+        pf, rf, gv)
+    if rc != 0:
+        raise RuntimeError(f"enzomodules_raytrace_twogrid returned {rc}")
+    return pf[0], rf[0], gv[0]
+
+
 def rt_identify(kph_field, nghost=3, dx=0.05):
     """Build a full grid carrying the radiative-transfer rate fields and run
     Enzo's field identification (grid::IdentifyRadiativeTransferFields).

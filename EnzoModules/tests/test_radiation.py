@@ -68,6 +68,24 @@ def test_beer_lambert(n_HI):
         f"N/N0={photons_final/N0:.4e} vs exp(-tau)={expected/N0:.4e} (tau={tau:.3f})"
 
 
+@pytest.mark.parametrize("n_HI", [1e-4, 3e-4])
+def test_multigrid_transport(n_HI):
+    """A ray crossing two tiled grids (AMR photon handoff) attenuates exactly
+    as one grid of the combined length -- proving inter-grid transport."""
+    energy = 14.0
+    N0 = 1e50
+    sigma = bridge.hi_cross_section(energy)
+    photons_final, radius, grids_visited = bridge.raytrace_twogrid(
+        n_HI, energy=energy, photons=N0, path_fraction=0.6,
+        density_units=DU, length_units=LU, time_units=TU)
+    assert grids_visited == 2          # the ray crossed the grid boundary
+    assert photons_final > 0
+    tau = (n_HI * DU / MH) * sigma * (radius * LU)
+    expected = N0 * math.exp(-tau)
+    assert abs(photons_final - expected) <= 5e-3 * expected, \
+        f"two-grid N/N0={photons_final/N0:.4e} vs exp(-tau)={expected/N0:.4e}"
+
+
 def test_optically_thick_absorbs_everything():
     """A very optically-thick ray is fully absorbed (photon deleted)."""
     photons_final, radius, kph_sum = bridge.raytrace_uniform(
