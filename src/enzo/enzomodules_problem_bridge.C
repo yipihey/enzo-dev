@@ -31,6 +31,7 @@
 #include "Hierarchy.h"
 #include "TopGridData.h"
 #include "LevelHierarchy.h"
+#include "FastSiblingLocator.h"
 
 class ImplicitProblemABC;
 extern "C" void enzomodules_init_timer();
@@ -38,6 +39,30 @@ int CommunicationInitialize(Eint32 *argc, char **argv[]);
 int InitializeNew(char *filename, HierarchyEntry &TopGrid, TopGridData &MetaData,
                   ExternalBoundary &Exterior, float *Initialdt);
 void AddLevel(LevelHierarchyEntry *Array[], HierarchyEntry *Grid, int level);
+int GenerateGridArray(LevelHierarchyEntry *LevelArray[], int level,
+                      HierarchyEntry **Grids[]);
+int CreateSiblingList(HierarchyEntry **Grids, int NumberOfGrids,
+                      SiblingGridList *SiblingList, int StaticLevelZero,
+                      TopGridData *MetaData, int level);
+int SetBoundaryConditions(HierarchyEntry *Grids[], int NumberOfGrids,
+                          SiblingGridList SiblingList[], int level,
+                          TopGridData *MetaData, ExternalBoundary *Exterior,
+                          LevelHierarchyEntry *Level);
+int RebuildHierarchy(TopGridData *MetaData, LevelHierarchyEntry *LevelArray[],
+                     int level);
+int PrepareDensityField(LevelHierarchyEntry *LevelArray[], int level,
+                        TopGridData *MetaData, FLOAT When,
+                        SiblingGridList **SiblingGridListStorage);
+int UpdateParticlePositions(grid *Grid);
+class Star;
+int EvolvePhotons(TopGridData *MetaData, LevelHierarchyEntry *LevelArray[],
+                  Star *&AllStars, FLOAT GridTime, int level, int LoopTime);
+#ifdef TRANSFER
+int RadiativeTransferInitialize(char *ParameterFile, HierarchyEntry &TopGrid,
+                                TopGridData &MetaData, ExternalBoundary &Exterior,
+                                ImplicitProblemABC *&ImplicitSolver,
+                                LevelHierarchyEntry *LevelArray[]);
+#endif
 int EvolveHierarchy(HierarchyEntry &TopGrid, TopGridData &MetaData,
                     ExternalBoundary *Exterior,
 #ifdef TRANSFER
@@ -51,6 +76,8 @@ struct EMProblem {
   ExternalBoundary Exterior;
   float dt;
   std::vector<grid *> grids;
+  LevelHierarchyEntry *LevelArray[MAX_DEPTH_OF_HIERARCHY];
+  SiblingGridList *SiblingGridListStorage[MAX_DEPTH_OF_HIERARCHY];
 };
 
 /* Depth-first walk of the AMR hierarchy collecting every grid on this rank. */
@@ -180,9 +207,228 @@ int enzomodules_problem_num_particles(void *h, int gi)
 void enzomodules_problem_get_particle_pos(void *h, int gi, int dim, double *out)
 { ((EMProblem *)h)->grids[gi]->EnzoModulesGetParticlePosition(dim, out); }
 
+/* ---- Persistent session: drive the timestep loop step-by-step ---------
+ * These let a host language (e.g. a Python re-implementation of EvolveLevel)
+ * own the time loop and call each orchestration step on the LIVE hierarchy,
+ * rather than handing the whole run to EvolveHierarchy.  The handle is the same
+ * EMProblem (use the field accessors above to read the evolving state). */
+
+/* Initialize a problem and build its LevelArray for stepping.  Returns a
+ * handle, or NULL on failure. */
+void *enzomodules_session_init(const char *paramfile)
+{
+  static bool comm_done = false;
+  if (!comm_done) {
+    int argc = 1;
+    static char arg0[] = "enzomodules";
+    static char *argv_storage[2] = { arg0, NULL };
+    char **argv = argv_storage;
+    CommunicationInitialize(&argc, &argv);
+    comm_done = true;
+  }
+  enzomodules_init_timer();
+
+  EMProblem *p = new EMProblem();
+  p->TopGrid.NextGridThisLevel = NULL;
+  p->TopGrid.NextGridNextLevel = NULL;
+  p->TopGrid.ParentGrid        = NULL;
+  p->TopGrid.GridData          = NULL;
+  for (int l = 0; l < MAX_DEPTH_OF_HIERARCHY; l++) {
+    p->LevelArray[l] = NULL;
+    p->SiblingGridListStorage[l] = NULL;
+  }
+
+  char *fname = strdup(paramfile);
+  int rc = InitializeNew(fname, p->TopGrid, p->MetaData, p->Exterior, &p->dt);
+  if (rc == FAIL) { free(fname); delete p; return NULL; }
+
+  p->MetaData.dtDataDump = 0.0;
+  /* The root-grid Poisson FFT defaults to the MPI-only transpose; force the
+   * serial path since this library is built without MPI. */
+  UnigridTranspose = 0;
+  AddLevel(p->LevelArray, &p->TopGrid, 0);
+
+#ifdef TRANSFER
+  /* Radiative transfer needs its own init (done in enzo.C, not InitializeNew):
+   * it allocates the kph/PhotoGamma fields, sets dtPhoton, and builds the
+   * radiation source list.  Skipped cleanly when RadiativeTransfer is off. */
+  if (RadiativeTransfer) {
+    ImplicitProblemABC *ImplicitSolver = NULL;
+    RadiativeTransferInitialize(fname, p->TopGrid, p->MetaData, p->Exterior,
+                                ImplicitSolver, p->LevelArray);
+  }
+#endif
+  free(fname);
+
+  collect_grids(&p->TopGrid, p->grids);
+  return (void *)p;
+}
+
+double enzomodules_session_time(void *h)      { return (double)((EMProblem *)h)->MetaData.Time; }
+double enzomodules_session_stop_time(void *h) { return (double)((EMProblem *)h)->MetaData.StopTime; }
+int    enzomodules_session_cycle(void *h)     { return ((EMProblem *)h)->MetaData.CycleNumber; }
+
+/* Refresh the cached grid list (call after rebuild). */
+static void em_recollect(EMProblem *p)
+{
+  p->grids.clear();
+  collect_grids(&p->TopGrid, p->grids);
+}
+
+/* Apply boundary conditions (sibling/parent copies + external boundary) to all
+ * grids on `level`. */
+int enzomodules_session_set_boundary(void *h, int level)
+{
+  EMProblem *p = (EMProblem *)h;
+  HierarchyEntry **Grids;
+  int n = GenerateGridArray(p->LevelArray, level, &Grids);
+  /* libenzo is built with -DFAST_SIB, so SetBoundaryConditions takes the
+   * precomputed sibling list (same path EvolveLevel uses).  Cache it in the
+   * per-level storage so the gravity chain (PrepareDensityField) can reuse it. */
+  delete[] p->SiblingGridListStorage[level];
+  SiblingGridList *SiblingList = new SiblingGridList[n];
+  CreateSiblingList(Grids, n, SiblingList, 0, &p->MetaData, level);
+  p->SiblingGridListStorage[level] = SiblingList;
+  int rc = SetBoundaryConditions(Grids, n, SiblingList, level, &p->MetaData,
+                                 &p->Exterior, p->LevelArray[level]);
+  delete[] Grids;
+  return (rc == FAIL) ? 1 : 0;
+}
+
+/* Self-gravity chain for `level` (the same sequence EvolveLevel runs):
+ * deposit mass + solve the Poisson equation (PrepareDensityField), then per
+ * grid compute accelerations and copy the potential to the baryon field.
+ * Requires set_boundary(level) first (to build the sibling list).  No-op
+ * unless SelfGravity is on. */
+int enzomodules_session_gravity(void *h, int level)
+{
+  EMProblem *p = (EMProblem *)h;
+  if (p->SiblingGridListStorage[level] == NULL) {
+    /* gravity needs a sibling list; build one if set_boundary wasn't called */
+    enzomodules_session_set_boundary(h, level);
+  }
+  HierarchyEntry **Grids;
+  int n = GenerateGridArray(p->LevelArray, level, &Grids);
+  int rc = 0;
+  if (PrepareDensityField(p->LevelArray, level, &p->MetaData, 0.5,
+                          p->SiblingGridListStorage) == FAIL) rc = 1;
+  for (int i = 0; i < n; i++) {
+    grid *g = Grids[i]->GridData;
+    if (level > 0) g->SolveForPotential(level);
+    g->ComputeAccelerations(level);
+    g->CopyPotentialToBaryonField();
+    g->ComputeAccelerationFieldExternal();
+  }
+  delete[] Grids;
+  return rc;
+}
+
+/* Update particle positions on all grids of `level` (drift by dtFixed). */
+void enzomodules_session_update_particles(void *h, int level)
+{
+  EMProblem *p = (EMProblem *)h;
+  HierarchyEntry **Grids;
+  int n = GenerateGridArray(p->LevelArray, level, &Grids);
+  for (int i = 0; i < n; i++)
+    UpdateParticlePositions(Grids[i]->GridData);
+  delete[] Grids;
+}
+
+/* Radiative transfer: trace photon packages on `level`.  No-op unless
+ * RadiativeTransfer is on (and the library was built with -DTRANSFER). */
+int enzomodules_session_evolve_photons(void *h, int level)
+{
+  EMProblem *p = (EMProblem *)h;
+#ifdef TRANSFER
+  HierarchyEntry **Grids;
+  int n = GenerateGridArray(p->LevelArray, level, &Grids);
+  FLOAT GridTime = (n > 0)
+    ? Grids[0]->GridData->ReturnTime() + Grids[0]->GridData->ReturnTimeStep()
+    : p->MetaData.Time;
+  delete[] Grids;
+  /* The radiation-source list is normally (re)built each step by EvolveLevel via
+   * StarParticleInitialize + RadiativeTransferPrepare, which need more
+   * EvolveLevel state than the minimal session provides.  Here we drive the
+   * transport directly on whatever sources RadiativeTransferInitialize set up;
+   * the photon-transport physics itself is certified separately via the
+   * ray-tracer grid bridges (enzomodules_raytrace_*). */
+  Star *AllStars = NULL;
+  /* LoopTime=0: take a single radiation step rather than sub-cycling the
+   * photon time all the way up to GridTime (which can be a huge loop). */
+  int rc = EvolvePhotons(&p->MetaData, p->LevelArray, AllStars, GridTime, level, 0);
+  return (rc == FAIL) ? 1 : 0;
+#else
+  return 0;
+#endif
+}
+
+/* CFL timestep for `level`: min over grids, clamped to StopTime. */
+double enzomodules_session_compute_dt(void *h, int level)
+{
+  EMProblem *p = (EMProblem *)h;
+  HierarchyEntry **Grids;
+  int n = GenerateGridArray(p->LevelArray, level, &Grids);
+  double dt = 1e30;
+  for (int i = 0; i < n; i++) {
+    double dtg = (double)Grids[i]->GridData->ComputeTimeStep();
+    if (dtg < dt) dt = dtg;
+  }
+  delete[] Grids;
+  double remaining = (double)p->MetaData.StopTime - (double)p->MetaData.Time;
+  if (dt > remaining && remaining > 0) dt = remaining;
+  return dt;
+}
+
+/* Set the timestep on all grids of `level`. */
+void enzomodules_session_set_dt(void *h, int level, double dt)
+{
+  EMProblem *p = (EMProblem *)h;
+  HierarchyEntry **Grids;
+  int n = GenerateGridArray(p->LevelArray, level, &Grids);
+  for (int i = 0; i < n; i++) Grids[i]->GridData->SetTimeStep((float)dt);
+  delete[] Grids;
+}
+
+/* Solve the hydro/MHD equations on all grids of `level` (one step). */
+int enzomodules_session_solve_hydro(void *h, int level)
+{
+  EMProblem *p = (EMProblem *)h;
+  HierarchyEntry **Grids;
+  int n = GenerateGridArray(p->LevelArray, level, &Grids);
+  int rc = 0;
+  for (int i = 0; i < n; i++)
+    if (Grids[i]->GridData->SolveHydroEquations(p->MetaData.CycleNumber, 0,
+                                                NULL, level) == FAIL) rc = 1;
+  delete[] Grids;
+  return rc;
+}
+
+/* Advance each grid's time by its dtFixed and bump the cycle counter. */
+void enzomodules_session_advance_time(void *h, int level)
+{
+  EMProblem *p = (EMProblem *)h;
+  HierarchyEntry **Grids;
+  int n = GenerateGridArray(p->LevelArray, level, &Grids);
+  for (int i = 0; i < n; i++) Grids[i]->GridData->SetTimeNextTimestep();
+  if (n > 0) p->MetaData.Time = Grids[0]->GridData->ReturnTime();
+  p->MetaData.CycleNumber++;
+  delete[] Grids;
+}
+
+/* Regrid: flag + cluster + (de)refine, then refresh the grid cache. */
+int enzomodules_session_rebuild(void *h, int level)
+{
+  EMProblem *p = (EMProblem *)h;
+  int rc = RebuildHierarchy(&p->MetaData, p->LevelArray, level);
+  em_recollect(p);
+  return (rc == FAIL) ? 1 : 0;
+}
+
 void enzomodules_free_problem(void *h)
 {
   EMProblem *p = (EMProblem *)h;
+  for (int l = 0; l < MAX_DEPTH_OF_HIERARCHY; l++)
+    delete[] p->SiblingGridListStorage[l];
   for (size_t i = 0; i < p->grids.size(); i++)
     delete p->grids[i];               /* frees BaryonField / particle arrays */
   delete p;                           /* (subgrid HierarchyEntry nodes leak;

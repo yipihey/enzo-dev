@@ -223,6 +223,47 @@ a reference to diff its own generators against.
 > external data (e.g. cosmological initial-condition files) need that data
 > present, as in a normal Enzo run.
 
+### Driving the time loop from Python (`problems.Session`)
+
+`Problem(..., evolve=True)` hands the whole run to Enzo's monolithic
+`EvolveHierarchy`.  A **`Session`** instead holds the *live* hierarchy and
+exposes each orchestration step `EvolveLevel` runs, so a host language can own
+the time loop — a Python (or Julia) re-implementation of `EvolveLevel` that
+calls the certified legacy reference for each step:
+
+```python
+from enzomodules.problems import Session
+with Session("run/Hydro/Hydro-1D/Toro-1-ShockTube/Toro-1-ShockTube.enzo") as s:
+    while s.time < s.stop_time:
+        s.set_boundary(0)                 # SetBoundaryConditions (FAST_SIB path)
+        dt = s.compute_dt(0); s.set_dt(0, dt)   # grid::ComputeTimeStep (CFL)
+        s.solve_hydro(0)                  # grid::SolveHydroEquations
+        s.advance_time(0)                 # SetTimeNextTimestep + cycle bump
+    rho = s.grid(0).field("Density")      # read the evolving state
+```
+
+The steps exposed on the live hierarchy:
+
+| `Session` method | legacy call |
+| --- | --- |
+| `set_boundary(level)` | `CreateSiblingList` + `SetBoundaryConditions` |
+| `compute_dt(level)` / `set_dt` | `grid::ComputeTimeStep` / `SetTimeStep` |
+| `solve_hydro(level)` | `grid::SolveHydroEquations` |
+| `advance_time(level)` | `grid::SetTimeNextTimestep` + cycle bump |
+| `gravity(level)` | `PrepareDensityField` (Poisson) + `ComputeAccelerations` + `CopyPotentialToBaryonField` |
+| `update_particles(level)` | `UpdateParticlePositions` |
+| `rebuild(level)` | `RebuildHierarchy` (flag + cluster + regrid) |
+| `evolve_photons(level)` | `EvolvePhotons` |
+| `step(level)` / `run(level)` | the default root-level loop |
+
+The headline guarantee (`tests/test_session.py`): the Python-driven loop
+reproduces `EvolveHierarchy` **bit-for-bit** on the Toro-1 shock tube
+(`Linf = 0`) and matches the exact Riemann solution — the equivalence that lets
+`EvolveLevel` be re-implemented step-by-step on top of these certified bridges
+and verified at every stage.  The gravity, particle and radiation steps run on
+the live hierarchy; their physics is certified in the dedicated bridge tests
+(`test_gravity.py`, `test_particles.py`, `test_radiation.py`).
+
 - **Multi-grid (AMR) photon transport** (`bridge.raytrace_twogrid`) — a ray
   crossing two tiled grids (the legacy `SubgridMarker` -> `FindPhotonNewGrid`
   handoff) attenuates exactly as one grid of the combined length
