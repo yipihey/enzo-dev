@@ -171,9 +171,18 @@ This is the foundation for wrapping chemistry and the photon transport solver
   shear, must-refine region (geometric), and Jeans length (gravity)
   (`tests/test_amr.py`); plus Berger-Rigoutsos clustering
   of flagged cells into child grids (`ProtoSubgrid` +
-  `IdentifyNewSubgridsBySignature`).  Other criteria (particle mass, Jeans,
-  cooling time, optical depth, resistive length, metallicity, must-refine
-  region) dispatch through the same path once their fields/globals are set.
+  `IdentifyNewSubgridsBySignature`).  The remaining criteria (particle mass,
+  cooling time, optical depth, resistive length, metallicity, metal mass)
+  dispatch through the same path once their fields/globals are set.
+- **AMR hierarchy operators** (`bridge.project_to_parent`,
+  `bridge.interpolate_to_child`, `bridge.correct_refined_fluxes`) -- the
+  inter-grid operators between refinement levels: restriction
+  (`grid::ProjectSolutionToParentGrid`, fine->coarse averaging), prolongation
+  (`grid::InterpolateFieldValues`, coarse->fine), and refluxing
+  (`grid::CorrectForRefinedFluxes`).  `tests/test_hierarchy.py` certifies each
+  by conservation/accuracy on a parent+child pair: restriction exact to 0,
+  linear prolongation to 4e-16, and refluxing corrects exactly the coarse cells
+  at the fine-grid boundary.
 
 ### Problem setup / initial conditions (all problem types)
 

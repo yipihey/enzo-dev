@@ -754,3 +754,134 @@ def ppm_sweep_1d(dslice, eslice, uslice, vslice, wslice, pslice,
     state = (list(c_d), list(c_e), list(c_u), list(c_v), list(c_w))
     fluxes = (list(c_df), list(c_ef), list(c_uf)) if want_fluxes else None
     return state, fluxes
+
+
+# --------------------------------------------------------------------------
+# AMR hierarchy inter-grid operators (RESTRICTION / PROLONGATION / REFLUXING).
+#
+# These wrap the grid:: methods that couple refinement levels:
+#   - grid::ProjectSolutionToParentGrid   (fine -> coarse volume average)
+#   - grid::InterpolateFieldValues        (coarse -> fine interpolation)
+#   - grid::CorrectForRefinedFluxes       (conservative flux correction)
+# The bridge builds a parent grid (N active cells over [0,1]) and a child grid
+# covering parent active cells [N/4, 3N/4) at 2x resolution (refinement 2).
+# --------------------------------------------------------------------------
+
+_HIER_GHOST = 3
+
+
+def project_to_parent(n, child_density):
+    """RESTRICTION: project a fine CHILD density down to its coarse PARENT
+    (grid::ProjectSolutionToParentGrid).
+
+    Builds a parent (``n`` active cells over [0,1]) and a child covering parent
+    active cells ``[n/4, 3n/4)`` at 2x resolution.  ``child_density`` is the flat
+    child Density field (length ``n + 2*ng`` incl. ghosts).  Returns
+    ``(parent_density, pstart, noverlap, ng)``: the full parent Density, the
+    parent active-cell index of the first overlapped cell, the number of
+    overlapped parent cells, and the ghost width.  Each overlapped parent cell
+    should equal the mean of the 2 child cells it covers (conservation).
+    """
+    lib = _load_gridlib()
+    if not hasattr(lib, "_proj_set"):
+        d = ctypes.POINTER(ctypes.c_double)
+        ip = ctypes.POINTER(ctypes.c_int)
+        lib.enzomodules_project_to_parent.restype = ctypes.c_int
+        lib.enzomodules_project_to_parent.argtypes = [
+            ctypes.c_int, d, d, ctypes.c_int, ip, ip, ip]
+        lib._proj_set = True
+    ng = _HIER_GHOST
+    csize = len(child_density)
+    cin = (ctypes.c_double * csize)(*[float(v) for v in child_density])
+    pcap = n + 2 * ng
+    pout = (ctypes.c_double * pcap)()
+    pstart = ctypes.c_int(0)
+    noverlap = ctypes.c_int(0)
+    ong = ctypes.c_int(0)
+    rc = lib.enzomodules_project_to_parent(int(n), cin, pout, pcap,
+                                           ctypes.byref(pstart),
+                                           ctypes.byref(noverlap),
+                                           ctypes.byref(ong))
+    if rc != 0:
+        raise RuntimeError(f"enzomodules_project_to_parent returned {rc}")
+    return ([pout[i] for i in range(pcap)],
+            pstart.value, noverlap.value, ong.value)
+
+
+def interpolate_to_child(n, parent_density):
+    """PROLONGATION: interpolate a coarse PARENT density up to the fine CHILD
+    (grid::InterpolateFieldValues).
+
+    ``parent_density`` is the flat parent Density (length ``n + 2*ng``).  Returns
+    ``(child_density, cactive, ng, cleft, cdx)``: the full child Density, the
+    child active-cell count, the ghost width, the child active left edge in
+    problem coordinates, and the child cell width.  For a linear parent field the
+    SecondOrderA interpolation is exact at child cell centers.
+    """
+    lib = _load_gridlib()
+    if not hasattr(lib, "_interp_set"):
+        d = ctypes.POINTER(ctypes.c_double)
+        ip = ctypes.POINTER(ctypes.c_int)
+        lib.enzomodules_interpolate_to_child.restype = ctypes.c_int
+        lib.enzomodules_interpolate_to_child.argtypes = [
+            ctypes.c_int, d, d, ctypes.c_int, ip, ip, d, d]
+        lib._interp_set = True
+    ng = _HIER_GHOST
+    psize = len(parent_density)
+    pin = (ctypes.c_double * psize)(*[float(v) for v in parent_density])
+    ccap = n + 2 * ng
+    cout = (ctypes.c_double * ccap)()
+    cactive = ctypes.c_int(0)
+    ong = ctypes.c_int(0)
+    cleft = ctypes.c_double(0.0)
+    cdx = ctypes.c_double(0.0)
+    rc = lib.enzomodules_interpolate_to_child(int(n), pin, cout, ccap,
+                                              ctypes.byref(cactive),
+                                              ctypes.byref(ong),
+                                              ctypes.byref(cleft),
+                                              ctypes.byref(cdx))
+    if rc != 0:
+        raise RuntimeError(f"enzomodules_interpolate_to_child returned {rc}")
+    return ([cout[i] for i in range(ccap)],
+            cactive.value, ong.value, cleft.value, cdx.value)
+
+
+def correct_refined_fluxes(n, density, lo, hi, init_left, refined_left,
+                           init_right, refined_right):
+    """REFLUXING: conservative flux correction at a fine/coarse boundary in 1D
+    (grid::CorrectForRefinedFluxes).
+
+    Builds a coarse grid of ``n`` active cells; a subgrid spans parent active
+    cells ``[lo, hi]``.  ``density`` is the flat coarse Density (length
+    ``n + 2*ng``).  The four flux values are the Density-field initial/refined
+    fluxes at the subgrid's left and right faces.  The coarse cells just outside
+    those faces are corrected:
+        left  cell (active lo-1):  Density += (init_left  - refined_left)
+        right cell (active hi+1):  Density -= (init_right - refined_right)
+    Returns ``(density_out, left_cell, right_cell)`` (corrected field and the two
+    corrected active cell indices).  Equal init/refined fluxes leave the field
+    unchanged (no-op identity).
+    """
+    lib = _load_gridlib()
+    if not hasattr(lib, "_reflux_set"):
+        d = ctypes.POINTER(ctypes.c_double)
+        ip = ctypes.POINTER(ctypes.c_int)
+        lib.enzomodules_correct_refined_fluxes.restype = ctypes.c_int
+        lib.enzomodules_correct_refined_fluxes.argtypes = [
+            ctypes.c_int, d, ctypes.c_int, ctypes.c_int,
+            ctypes.c_double, ctypes.c_double, ctypes.c_double, ctypes.c_double,
+            d, ctypes.c_int, ip, ip]
+        lib._reflux_set = True
+    gsize = len(density)
+    din = (ctypes.c_double * gsize)(*[float(v) for v in density])
+    dout = (ctypes.c_double * gsize)()
+    lc = ctypes.c_int(0)
+    rcell = ctypes.c_int(0)
+    rc = lib.enzomodules_correct_refined_fluxes(
+        int(n), din, int(lo), int(hi),
+        float(init_left), float(refined_left),
+        float(init_right), float(refined_right),
+        dout, gsize, ctypes.byref(lc), ctypes.byref(rcell))
+    if rc != 0:
+        raise RuntimeError(f"enzomodules_correct_refined_fluxes returned {rc}")
+    return [dout[i] for i in range(gsize)], lc.value, rcell.value
