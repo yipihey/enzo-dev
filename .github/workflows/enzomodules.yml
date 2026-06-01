@@ -89,9 +89,10 @@ jobs:
       - name: Build grid-method bridge (reuses the Enzo library)
         run: ./EnzoModules/deps/build_grid.sh
 
-      - name: Run hydro_rk + Dedner-MHD + ZEUS + particle + radiation tests
+      - name: Run all C++-solver tests (hydro_rk, MHD, ZEUS, particles, radiation, gravity)
         working-directory: EnzoModules
         run: |
           python -m pytest -q \
             tests/test_hydro_rk.py tests/test_zeus.py \
-            tests/test_particles.py tests/test_radiation.py
+            tests/test_particles.py tests/test_radiation.py \
+            tests/test_gravity.py

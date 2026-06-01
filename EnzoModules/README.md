@@ -140,14 +140,19 @@ reads the result back.  Certified on this infrastructure so far:
   `kphHI`/`PhotoGamma` rate fields, identified by
   `grid::IdentifyRadiativeTransferFields` and round-tripped
   (`tests/test_radiation.py`).
+- **Gravity / Poisson** (`bridge.poisson_solve`) — Enzo's multigrid solver
+  (the engine behind `grid::SolveForPotential`).  `tests/test_gravity.py`
+  certifies it against manufactured solutions in 1D/2D/3D (recovers
+  `sin(pi x)` shapes to <5e-3, converged residual ~1e-9) plus linearity and
+  superposition.
 
-This is the foundation for wrapping gravity/Poisson, chemistry, and the photon
-transport solver — they reuse the same primitives; see `docs/WRAPPING.md`.
+This is the foundation for wrapping chemistry and the photon transport solver
+— they reuse the same primitives; see `docs/WRAPPING.md`.
 
 > Still to do: the photon-transport ray-tracer (`grid::WalkPhotonPackage`)
-> needs units, HEALPix directions, the species + 7 rate fields, and inter-grid
-> transport — a subsystem now buildable on this fixture; and the
-> multi-dimensional (y/z) hydro sweeps.
+> needs units, HEALPix ray directions, the species + 7 rate fields, and
+> inter-grid transport — a larger subsystem, now buildable on this fixture;
+> and the multi-dimensional (y/z) hydro sweeps.
 
 ## The per-kernel workflow
 

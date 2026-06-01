@@ -288,6 +288,40 @@ def cic_deposit(particles, dims, left=(0.0, 0.0, 0.0), right=(1.0, 1.0, 1.0)):
     return [out[k] for k in range(osize.value)], ocv.value
 
 
+def poisson_solve(rhs, dims):
+    """Solve the discrete Poisson equation L(phi) = rhs with Enzo's multigrid
+    solver (the engine behind grid::SolveForPotential).
+
+    ``rhs`` is a flat list of length ``prod(dims)``; ``dims`` is ``(nx, ny, nz)``
+    with trailing 1s for lower rank (use 2^k+1 per active axis for clean
+    coarsening).  Returns ``(solution, norm, mean)`` where ``norm/mean`` is the
+    converged residual diagnostic.  The operator carries an internal cell-size
+    normalization (see SolveForPotential's ``Constant``), so manufactured-
+    solution checks compare shape.
+    """
+    lib = _load_gridlib()
+    if not hasattr(lib, "_poisson_set"):
+        d = ctypes.POINTER(ctypes.c_double)
+        ip = ctypes.POINTER(ctypes.c_int)
+        lib.enzomodules_poisson_solve.restype = ctypes.c_int
+        lib.enzomodules_poisson_solve.argtypes = [ctypes.c_int, ip, d, d, d, d]
+        lib._poisson_set = True
+    rank = sum(1 for v in dims if v > 1) or 1
+    c_dims = (ctypes.c_int * 3)(int(dims[0]),
+                                int(dims[1]) if len(dims) > 1 else 1,
+                                int(dims[2]) if len(dims) > 2 else 1)
+    size = len(rhs)
+    c_rhs = (ctypes.c_double * size)(*[float(v) for v in rhs])
+    c_sol = (ctypes.c_double * size)()
+    norm = ctypes.c_double(0.0)
+    mean = ctypes.c_double(0.0)
+    rc = lib.enzomodules_poisson_solve(rank, c_dims, c_rhs, c_sol,
+                                       ctypes.byref(norm), ctypes.byref(mean))
+    if rc != 0:
+        raise RuntimeError(f"enzomodules_poisson_solve returned {rc}")
+    return [c_sol[i] for i in range(size)], norm.value, mean.value
+
+
 def rt_identify(kph_field, nghost=3, dx=0.05):
     """Build a full grid carrying the radiative-transfer rate fields and run
     Enzo's field identification (grid::IdentifyRadiativeTransferFields).

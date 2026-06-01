@@ -29,8 +29,47 @@
 #include "TopGridData.h"
 
 int SetDefaultGlobalValues(TopGridData &MetaData);
+int MultigridSolver(float *RHS, float *Solution, int Rank, int TopDims[],
+                    float &norm, float &mean, int start_depth,
+                    float tolerance, int max_iter);
 
 extern "C" {
+
+/* Gravity/Poisson: solve the discrete Poisson equation L(phi) = rhs on a
+ * uniform grid with Enzo's multigrid solver (the engine behind
+ * grid::SolveForPotential).  dims are the field dimensions (use 2^k+1 per
+ * axis for clean multigrid coarsening); rhs_in and solution_out are flat
+ * length prod(dims).  Returns the converged residual diagnostics in
+ * *out_norm / *out_mean.  Returns 0 on success. */
+int enzomodules_poisson_solve(int rank, int dims[],
+                              const double *rhs_in, double *solution_out,
+                              double *out_norm, double *out_mean)
+{
+  TopGridData MetaData;
+  SetDefaultGlobalValues(MetaData);
+
+  int size = 1;
+  for (int d = 0; d < rank; d++) size *= dims[d];
+
+  float *rhs = new float[size];
+  float *sol = new float[size];
+  for (int i = 0; i < size; i++) { rhs[i] = (float)rhs_in[i]; sol[i] = 0.0; }
+
+  float norm = 0.0, mean = 0.0;
+  int tdims[3] = { 1, 1, 1 };
+  for (int d = 0; d < rank; d++) tdims[d] = dims[d];
+
+  int rc = MultigridSolver(rhs, sol, rank, tdims, norm, mean,
+                           /*start_depth*/ 0, /*tolerance*/ 2.0e-6,
+                           /*max_iter*/ 100);
+
+  for (int i = 0; i < size; i++) solution_out[i] = (double)sol[i];
+  *out_norm = (double)norm;
+  *out_mean = (double)mean;
+  delete[] rhs;
+  delete[] sol;
+  return (rc == FAIL) ? 1 : 0;
+}
 
 /* One ZEUS hydro update of a 1D slice (operator-split finite-difference
  * solver, grid::ZeusSolver).  d = density, e = specific *internal* energy,
