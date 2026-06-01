@@ -422,12 +422,22 @@ def raytrace_uniform(hi_density, energy=14.0, photons=1e50, path_fraction=0.3,
     return pf[0], rf[0], ks[0]
 
 
-def flag_cells(rank, dims, density, slope_threshold=0.3, dx=1.0):
-    """AMR cell flagging by density slope (legacy grid::SetFlaggingField).
+# AMR refinement criteria (CellFlaggingMethod codes) exercisable here.
+FLAG_SLOPE = 1
+FLAG_MASS = 2              # baryon mass / overdensity
+FLAG_SHOCKS = 3
+FLAG_SHEAR = 9
+FLAG_SECOND_DERIVATIVE = 15
 
-    ``density`` is the flat field (length prod(dims), incl. ghosts).  Returns
-    ``(flagging, count)`` -- the int FlaggingField (1 = flagged) and the number
-    of flagged cells.
+
+def flag_cells(rank, dims, density, method=FLAG_SLOPE, threshold=0.3,
+               energy=None, u=None, v=None, w=None, dx=1.0):
+    """AMR cell flagging via the real grid::SetFlaggingField dispatch, for a
+    chosen refinement criterion (``method``, a CellFlaggingMethod code):
+    1=slope, 2=baryon mass/overdensity, 3=shocks, 9=shear,
+    15=second derivative.  ``density`` is required; ``energy``/``u``/``v``/``w``
+    default to a quiescent state (needed by shock/shear criteria).  Returns
+    ``(flagging, count)``.
     """
     lib = _load_gridlib()
     if not hasattr(lib, "_flag_set"):
@@ -435,18 +445,29 @@ def flag_cells(rank, dims, density, slope_threshold=0.3, dx=1.0):
         ip = ctypes.POINTER(ctypes.c_int)
         lib.enzomodules_flag_cells.restype = ctypes.c_int
         lib.enzomodules_flag_cells.argtypes = [
-            ctypes.c_int, ip, ctypes.c_double, d, ctypes.c_double, ip, ip]
+            ctypes.c_int, ip, ctypes.c_double, ctypes.c_int, ctypes.c_double,
+            d, d, d, d, d, ip, ip]
         lib._flag_set = True
+    size = len(density)
     c_dims = (ctypes.c_int * 3)(int(dims[0]),
                                 int(dims[1]) if len(dims) > 1 else 1,
                                 int(dims[2]) if len(dims) > 2 else 1)
-    size = len(density)
-    c_dens = (ctypes.c_double * size)(*[float(x) for x in density])
+    zero = [0.0] * size
+    energy = zero if energy is None else energy
+    u = zero if u is None else u
+    v = zero if v is None else v
+    w = zero if w is None else w
+
+    def arr(a):
+        return (ctypes.c_double * size)(*[float(x) for x in a])
+
+    c_d, c_e = arr(density), arr(energy)
+    c_u, c_v, c_w = arr(u), arr(v), arr(w)
     c_flag = (ctypes.c_int * size)()
     c_count = ctypes.c_int(0)
-    rc = lib.enzomodules_flag_cells(int(rank), c_dims, float(dx), c_dens,
-                                    float(slope_threshold), c_flag,
-                                    ctypes.byref(c_count))
+    rc = lib.enzomodules_flag_cells(int(rank), c_dims, float(dx), int(method),
+                                    float(threshold), c_d, c_e, c_u, c_v, c_w,
+                                    c_flag, ctypes.byref(c_count))
     if rc != 0:
         raise RuntimeError(f"enzomodules_flag_cells returned {rc}")
     return [c_flag[i] for i in range(size)], c_count.value
@@ -518,6 +539,50 @@ def ppm_hydro_step(rank, dims, d, e, u, v, w, dx, dt, gamma):
     if rc != 0:
         raise RuntimeError(f"enzomodules_ppm_hydro_step returned {rc}")
     return list(cd), list(ce), list(cu), list(cv), list(cw)
+
+
+def mhdct_step(dims, d, e, u, v, w, bx, by, bz, dx, dt, gamma, nsteps=1):
+    """``nsteps`` constrained-transport (CT) MHD steps (grid::SolveMHD_Li via
+    grid::SolveHydroEquations, HydroMethod=MHD_Li, UseMHDCT=1).
+
+    Lays down both the cell-centered Bfield1/2/3 and the staggered face-centered
+    MagneticField[], takes ``nsteps`` in-place CT steps on the same grid (so the
+    face-centered field carries over), and reads the fields back.  Arrays are
+    flat row-major of length prod(dims) incl. ghost zones.  Returns
+    ``(d, e, u, v, w, bx, by, bz, maxdivb_before, maxdivb_after)`` -- the CT
+    invariant is that both divergences stay ~machine precision.
+    """
+    lib = _load_gridlib()
+    if not hasattr(lib, "_mhdct_step_set"):
+        d_p = ctypes.POINTER(ctypes.c_double)
+        ip = ctypes.POINTER(ctypes.c_int)
+        lib.enzomodules_mhdct_step.restype = ctypes.c_int
+        lib.enzomodules_mhdct_step.argtypes = [
+            ip, ctypes.c_double, ctypes.c_double, ctypes.c_double, ctypes.c_int,
+            d_p, d_p, d_p, d_p, d_p, d_p, d_p, d_p, d_p, d_p]
+        lib._mhdct_step_set = True
+    c_dims = (ctypes.c_int * 3)(int(dims[0]),
+                                int(dims[1]) if len(dims) > 1 else 1,
+                                int(dims[2]) if len(dims) > 2 else 1)
+    size = len(d)
+    cd = (ctypes.c_double * size)(*[float(x) for x in d])
+    ce = (ctypes.c_double * size)(*[float(x) for x in e])
+    cu = (ctypes.c_double * size)(*[float(x) for x in u])
+    cv = (ctypes.c_double * size)(*[float(x) for x in v])
+    cw = (ctypes.c_double * size)(*[float(x) for x in w])
+    cbx = (ctypes.c_double * size)(*[float(x) for x in bx])
+    cby = (ctypes.c_double * size)(*[float(x) for x in by])
+    cbz = (ctypes.c_double * size)(*[float(x) for x in bz])
+    before = ctypes.c_double(0.0)
+    after = ctypes.c_double(0.0)
+    rc = lib.enzomodules_mhdct_step(c_dims, float(dx), float(dt), float(gamma),
+                                    int(nsteps),
+                                    cd, ce, cu, cv, cw, cbx, cby, cbz,
+                                    ctypes.byref(before), ctypes.byref(after))
+    if rc != 0:
+        raise RuntimeError(f"enzomodules_mhdct_step returned {rc}")
+    return (list(cd), list(ce), list(cu), list(cv), list(cw),
+            list(cbx), list(cby), list(cbz), before.value, after.value)
 
 
 def raytrace_twogrid(hi_density, energy=14.0, photons=1e50, path_fraction=0.6,

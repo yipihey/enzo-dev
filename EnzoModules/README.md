@@ -161,12 +161,18 @@ reads the result back.  Certified on this infrastructure so far:
 This is the foundation for wrapping chemistry and the photon transport solver
 — they reuse the same primitives; see `docs/WRAPPING.md`.
 
+- **MHD constrained transport** (`bridge.mhdct_step`) -- the CT solver
+  `grid::SolveMHD_Li` (HydroMethod=MHD_Li, UseMHDCT).  `tests/test_mhdct.py`
+  certifies the defining CT invariant on a Brio-Wu tube: the discrete
+  divergence of the face-centered field stays at machine zero under evolution.
 - **AMR control** (`bridge.flag_cells`, `bridge.cluster`) -- cell flagging
-  (`grid::SetFlaggingField`, by density slope) and clustering flagged cells
-  into child grids (Berger-Rigoutsos via `ProtoSubgrid` +
-  `IdentifyNewSubgridsBySignature`).  `tests/test_amr.py` checks that a density
-  jump flags the right cells and that separated flagged blocks cluster into
-  disjoint, minimal subgrids.
+  via the real `grid::SetFlaggingField` dispatch (any CellFlaggingMethod), with
+  the hydro criteria certified: slope, baryon-mass/overdensity, second
+  derivative, and shear (`tests/test_amr.py`); plus Berger-Rigoutsos clustering
+  of flagged cells into child grids (`ProtoSubgrid` +
+  `IdentifyNewSubgridsBySignature`).  Other criteria (particle mass, Jeans,
+  cooling time, optical depth, resistive length, metallicity, must-refine
+  region) dispatch through the same path once their fields/globals are set.
 
 ### Problem setup / initial conditions (all problem types)
 

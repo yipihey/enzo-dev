@@ -2862,6 +2862,10 @@ int zEulerSweep(int j, int NumberOfSubgrids, fluxes *SubgridFluxes[],
     // AMR: copy the refinement FlaggingField in / out (int per cell).
     void EnzoModulesSetFlagging(const int *data);
     void EnzoModulesGetFlagging(int *data);
+    // MHD constrained transport: face-centered B + discrete divergence.
+    void EnzoModulesSetMagneticField(int dim, const double *data);
+    int  EnzoModulesMagneticSize(int dim);
+    double EnzoModulesMaxDivB();
     // Particles (full-grid support for particle-mesh / deposit tests).
     int  EnzoModulesSetupParticles(int n, int num_attributes);
     void EnzoModulesSetParticlePosition(int dim, const double *data);

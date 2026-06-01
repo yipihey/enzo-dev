@@ -43,29 +43,63 @@ static void em_edges(int rank, int dims[], double dx, FLOAT left[], FLOAT right[
 
 extern "C" {
 
-/* Flag cells for refinement by density slope.  `density` is the full field
- * (length prod(dims), incl. ghosts); out_flag receives the FlaggingField
- * (1 = flagged), *out_count the number of flagged cells.  Returns 0. */
-int enzomodules_flag_cells(int rank, int dims[], double dx,
-                           const double *density, double slope_threshold,
+/* Flag cells for refinement by a chosen CellFlaggingMethod criterion, via the
+ * real grid::SetFlaggingField dispatch.  Supported `method` codes (Enzo's):
+ *   1  slope            2  baryon mass / overdensity   3  shocks
+ *   9  shear            15 second derivative           (others reachable too,
+ *   but need particles/metals/B/chemistry -- set those fields and call the
+ *   matching method).  `threshold` sets that criterion's parameter.  d/e/u/v/w
+ *   are the full hydro fields (length prod(dims), incl. ghosts); out_flag gets
+ *   the FlaggingField (>=1 = flagged), *out_count the flagged-cell count. */
+int enzomodules_flag_cells(int rank, int dims[], double dx, int method,
+                           double threshold,
+                           const double *d, const double *e,
+                           const double *u, const double *v, const double *w,
                            int *out_flag, int *out_count)
 {
   TopGridData MetaData;
   SetDefaultGlobalValues(MetaData);
   ComovingCoordinates = 0;
   NumberOfGhostZones  = 3;
+  DualEnergyFormalism = 0;
+  Gamma               = 1.4;
   for (int m = 0; m < MAX_FLAGGING_METHODS; m++)
     CellFlaggingMethod[m] = INT_UNDEFINED;
-  CellFlaggingMethod[0]        = 1;                 /* refine by slope */
-  SlopeFlaggingFields[0]       = INT_UNDEFINED;     /* all fields */
-  MinimumSlopeForRefinement[0] = slope_threshold;
+  CellFlaggingMethod[0] = method;
+
+  switch (method) {
+    case 1:   /* slope */
+      SlopeFlaggingFields[0]       = INT_UNDEFINED;
+      MinimumSlopeForRefinement[0] = threshold;
+      break;
+    case 2:   /* baryon mass / overdensity */
+      MinimumMassForRefinement[0]              = threshold;
+      MinimumMassForRefinementLevelExponent[0] = 0.0;
+      break;
+    case 3:   /* shocks */
+      MinimumPressureJumpForRefinement = threshold;
+      break;
+    case 9:   /* shear */
+      MinimumShearForRefinement = threshold;
+      break;
+    case 15:  /* second derivative */
+      SecondDerivativeFlaggingFields[0]       = INT_UNDEFINED;
+      MinimumSecondDerivativeForRefinement[0] = threshold;
+      break;
+    default:
+      break;
+  }
 
   grid g;
   FLOAT left[3], right[3];
   em_edges(rank, dims, dx, left, right);
-  int ftypes[1] = { Density };
-  g.EnzoModulesSetupGrid(rank, dims, left, right, 1, ftypes, 0.0);
-  g.EnzoModulesSetField(g.EnzoModulesFieldIndex(Density), density);
+  int ftypes[5] = { Density, TotalEnergy, Velocity1, Velocity2, Velocity3 };
+  g.EnzoModulesSetupGrid(rank, dims, left, right, 5, ftypes, 0.0);
+  g.EnzoModulesSetField(g.EnzoModulesFieldIndex(Density),     d);
+  g.EnzoModulesSetField(g.EnzoModulesFieldIndex(TotalEnergy), e);
+  g.EnzoModulesSetField(g.EnzoModulesFieldIndex(Velocity1),   u);
+  g.EnzoModulesSetField(g.EnzoModulesFieldIndex(Velocity2),   v);
+  g.EnzoModulesSetField(g.EnzoModulesFieldIndex(Velocity3),   w);
 
   g.ClearFlaggingField();
   int count = 0;

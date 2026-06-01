@@ -17,6 +17,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <math.h>
 #include "ErrorExceptions.h"
 #include "macros_and_parameters.h"
 #include "typedefs.h"
@@ -102,6 +103,49 @@ void grid::EnzoModulesGetFlagging(int *data)
 {
   int size = this->EnzoModulesGridSize();
   for (int i = 0; i < size; i++) data[i] = FlaggingField[i];
+}
+
+/* ---- MHD constrained transport (face-centered B) --------------------- */
+
+/* Copy a flat row-major array into the face-centered MagneticField[dim].
+ * MagneticField[dim] is staggered: it has one extra zone along axis `dim`
+ * (MagneticDims[dim] = GridDimension with +1 on axis dim), set up by
+ * MHD_SetupDims during EnzoModulesSetupGrid (UseMHDCT must be 1).  The caller
+ * supplies a buffer of length MagneticSize[dim]. */
+void grid::EnzoModulesSetMagneticField(int dim, const double *data)
+{
+  for (int i = 0; i < MagneticSize[dim]; i++)
+    MagneticField[dim][i] = (float)data[i];
+}
+
+int grid::EnzoModulesMagneticSize(int dim)
+{
+  return MagneticSize[dim];
+}
+
+/* Discrete CT divergence of the face-centered magnetic field over the active
+ * cells (the defining invariant of constrained transport).  Mirrors the
+ * divergence stencil in Grid_MHD_Diagnose.C using the staggered MagneticDims
+ * indexing (indexb1/2/3).  Returns the maximum |divB| over active cells. */
+double grid::EnzoModulesMaxDivB()
+{
+  double dx = (double)CellWidth[0][0];
+  double dy = (GridRank > 1) ? (double)CellWidth[1][0] : 1.0;
+  double dz = (GridRank > 2) ? (double)CellWidth[2][0] : 1.0;
+
+  double maxdivb = 0.0;
+  for (int k = GridStartIndex[2]; k <= GridEndIndex[2]; k++)
+    for (int j = GridStartIndex[1]; j <= GridEndIndex[1]; j++)
+      for (int i = GridStartIndex[0]; i <= GridEndIndex[0]; i++) {
+        double divergence =
+          (MagneticField[0][indexb1(i+1,j,k)] - MagneticField[0][indexb1(i,j,k)]) / dx +
+          ((GridRank < 2) ? 0.0 :
+           (MagneticField[1][indexb2(i,j+1,k)] - MagneticField[1][indexb2(i,j,k)]) / dy) +
+          ((GridRank < 3) ? 0.0 :
+           (MagneticField[2][indexb3(i,j,k+1)] - MagneticField[2][indexb3(i,j,k)]) / dz);
+        if (fabs(divergence) > maxdivb) maxdivb = fabs(divergence);
+      }
+  return maxdivb;
 }
 
 /* ---- Particles -------------------------------------------------------- */
