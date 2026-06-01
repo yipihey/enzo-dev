@@ -174,16 +174,76 @@ def test_python_evolve_level_amr_recursion():
     assert abs(mean_ref - mean_sess) < 1e-3 * mean_ref   # conservation
 
 
-def test_session_evolve_photons_runs():
-    """The radiative-transfer step is callable on a live RT hierarchy (the
-    transport physics itself is certified in test_radiation.py)."""
-    path = _param("RadiationTransport/PhotonTest/PhotonTest.enzo")
-    if not os.path.exists(path):
+def _photontest():
+    p = _param("RadiationTransport/PhotonTest/PhotonTest.enzo")
+    if not os.path.exists(p):
         pytest.skip("PhotonTest parameter file missing")
+    return p
+
+
+def test_session_evolve_photons_emits():
+    """EvolvePhotons actually emits from the parameter-file source and deposits
+    photo-ionization rates on the live hierarchy (not just 'runs')."""
+    import enzomodules.problems as P
+    with problems.Session(_photontest()) as s:
+        g = s.grid(0)
+        assert "kphHI" in g.field_names
+        with P._suppress_fd_output():
+            s.set_boundary(0)
+            s.set_dt(0, s.compute_dt(0))
+            s.evolve_photons(0)
+        kph = g.field("kphHI")
+        # the source switched on: some cells now have a non-zero ionization rate
+        assert max(kph) > 0.0, "EvolvePhotons deposited no photo-ionization rate"
+        assert sum(1 for v in kph if v > 0) >= 1
+
+
+def test_session_evolve_photons_ionization_front():
+    """Driving several photon steps grows the ionized region monotonically --
+    the Stromgren-sphere I-front propagation that is PhotonTest's purpose --
+    proving the full EvolvePhotons orchestration couples radiation to the
+    chemistry on the live hierarchy."""
+    import enzomodules.problems as P
+    with problems.Session(_photontest()) as s:
+        g = s.grid(0)
+        fracs = []
+        ncells = []
+        for _ in range(4):
+            with P._suppress_fd_output():
+                s.set_boundary(0)
+                s.set_dt(0, s.compute_dt(0))
+                s.evolve_photons(0)
+                s.advance_time(0)
+            hi = g.field("HIDensity")
+            hii = g.field("HIIDensity")
+            kph = g.field("kphHI")
+            fracs.append(sum(hii) / (sum(hi) + sum(hii)))
+            ncells.append(sum(1 for v in kph if v > 0))
+        # the ionized fraction and the illuminated volume both grow each step
+        assert all(b > a for a, b in zip(fracs, fracs[1:])), f"ionized frac {fracs}"
+        assert all(b >= a for a, b in zip(ncells, ncells[1:])), f"kph cells {ncells}"
+        assert fracs[-1] > fracs[0] * 2
+
+
+def test_session_radiation_hydro_coupled():
+    """The recursive Python EvolveLevel with radiation=True drives a coupled
+    radiation-hydrodynamics AMR problem (PhotonTestAMR: hydro + RT + AMR),
+    emitting photons each step and ionizing the medium while the hydro and
+    regridding run -- the full RHD time integrator, from Python."""
+    path = _param("RadiationTransport/PhotonTestAMR/PhotonTestAMR.enzo")
+    if not os.path.exists(path):
+        pytest.skip("PhotonTestAMR parameter file missing")
     with problems.Session(path) as s:
-        s.set_boundary(0)
-        dt = s.compute_dt(0)
-        s.set_dt(0, dt)
-        s.evolve_photons(0)   # raises on FAIL
-        # RadiativeTransferInitialize allocated the RT fields
-        assert "kphHI" in s.grid(0).field_names
+        g = s.grid(0)
+
+        def ionized():
+            hi = g.field("HIDensity")
+            hii = g.field("HIIDensity")
+            return sum(hii) / (sum(hi) + sum(hii))
+
+        f0 = ionized()
+        for _ in range(2):
+            s.evolve_level(0, radiation=True)
+        f1 = ionized()
+        assert f1 > f0, f"ionized fraction did not grow ({f0:.3e} -> {f1:.3e})"
+        assert all(v > 0 for v in g.field("Density"))   # hydro stays physical

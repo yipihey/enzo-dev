@@ -336,8 +336,12 @@ class Session:
         self._lib.enzomodules_session_update_particles(self._h, level)
 
     def evolve_photons(self, level: int = 0) -> None:
-        """Trace radiative-transfer photon packages.  No-op unless
-        RadiativeTransfer is on (library built with -DTRANSFER)."""
+        """Emit and transport radiative-transfer photon packages, depositing
+        photo-ionization / heating rates and coupling to the chemistry.  Sets up
+        the SubgridMarker grid-ownership map, sizes the photon timestep, and
+        sub-cycles the photon time up to the grid time so the parameter-file
+        sources actually radiate.  No-op unless RadiativeTransfer is on (library
+        built with -DTRANSFER).  Call after set_dt(level, ...)."""
         if self._lib.enzomodules_session_evolve_photons(self._h, level):
             raise RuntimeError(f"EvolvePhotons failed (level {level})")
 
@@ -374,7 +378,8 @@ class Session:
             raise RuntimeError(f"FinalizeFluxes failed (level {level})")
 
     def evolve_level(self, level: int = 0, dt_above: float = 0.0,
-                     gravity: bool = False, regrid: bool = True) -> int:
+                     gravity: bool = False, regrid: bool = True,
+                     radiation: bool = False) -> int:
         """A Python re-implementation of Enzo's recursive EvolveLevel, built
         entirely from the certified session steps.  Mirrors the legacy control
         flow: clear the boundary fluxes once on entry, then sub-cycle this level
@@ -397,6 +402,9 @@ class Session:
                 dt = min(dt, dt_above - done)        # don't overshoot the parent
             self.set_dt(level, dt)
 
+            if radiation:                           # emit + transport photons
+                self.evolve_photons(level)          # (couples to the chemistry)
+
             self.create_fluxes(level)               # allocate flux storage
             if gravity:
                 self.gravity(level)
@@ -410,7 +418,7 @@ class Session:
             if self.num_grids_on_level(level + 1) > 0:
                 self.set_boundary(level)            # refresh before projection
                 self.evolve_level(level + 1, dt_above=dt, gravity=gravity,
-                                  regrid=regrid)
+                                  regrid=regrid, radiation=radiation)
                 self.update_from_finer(level)       # project + flux-correct
             self.finalize_fluxes(level)
 
@@ -423,17 +431,21 @@ class Session:
         return n
 
     def run_amr(self, gravity: bool = False, regrid: bool = True,
-                max_cycles: int = 100000) -> int:
+                radiation: bool = False, max_cycles: int = 100000) -> int:
         """Top-level driver mirroring EvolveHierarchy: an initial regrid, then
         repeatedly evolve the whole hierarchy one root step (``evolve_level(0)``)
-        and regrid, until StopTime.  This is a complete AMR run driven from
-        Python on top of the certified legacy steps."""
+        and regrid, until StopTime.  Pass ``gravity=True`` to include the
+        self-gravity chain and ``radiation=True`` to emit + transport photons
+        each step.  This is a complete (optionally radiation-hydrodynamic +
+        gravitating) AMR run driven from Python on top of the certified legacy
+        steps."""
         n = 0
         with _suppress_fd_output():
             if regrid:
                 self.rebuild(0)
             while self.time < self.stop_time and n < max_cycles:
-                self.evolve_level(0, gravity=gravity, regrid=regrid)
+                self.evolve_level(0, gravity=gravity, regrid=regrid,
+                                  radiation=radiation)
                 if regrid:
                     self.rebuild(0)
                 n += 1

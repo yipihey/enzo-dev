@@ -75,6 +75,11 @@ int RadiativeTransferInitialize(char *ParameterFile, HierarchyEntry &TopGrid,
                                 TopGridData &MetaData, ExternalBoundary &Exterior,
                                 ImplicitProblemABC *&ImplicitSolver,
                                 LevelHierarchyEntry *LevelArray[]);
+int RadiativeTransferComputeTimestep(LevelHierarchyEntry *LevelArray[],
+                                     TopGridData *MetaData, float dtLevelAbove,
+                                     int level);
+int SetSubgridMarker(TopGridData &MetaData, LevelHierarchyEntry *LevelArray[],
+                     int level, int UpdateReplicatedGridsOnly);
 #endif
 int EvolveHierarchy(HierarchyEntry &TopGrid, TopGridData &MetaData,
                     ExternalBoundary *Exterior,
@@ -353,28 +358,46 @@ void enzomodules_session_update_particles(void *h, int level)
   delete[] Grids;
 }
 
-/* Radiative transfer: trace photon packages on `level`.  No-op unless
- * RadiativeTransfer is on (and the library was built with -DTRANSFER). */
+/* Radiative transfer: trace photon packages on `level`, sub-cycling the photon
+ * time up to the grid time (GridTime = grid Time + dtFixed) so the sources
+ * actually emit and deposit photo-ionization/heating rates.  No-op unless
+ * RadiativeTransfer is on (and the library was built with -DTRANSFER).
+ *
+ * The radiation sources come from RadiativeTransferInitialize (which read them
+ * from the parameter file in session_init).  We deliberately do NOT call
+ * RadiativeTransferPrepare here: its StarParticleRadTransfer rebuilds the source
+ * list from star particles and would wipe the parameter-file sources.  Instead
+ * we size dtPhoton with RadiativeTransferComputeTimestep (which leaves the
+ * source list untouched) and let EvolvePhotons sub-cycle and emit. */
 int enzomodules_session_evolve_photons(void *h, int level)
 {
   EMProblem *p = (EMProblem *)h;
 #ifdef TRANSFER
+  /* RestartPhotons (gated on this flag) would also rebuild from star particles;
+   * clear it so EvolvePhotons just transports the existing sources. */
+  p->MetaData.FirstTimestepAfterRestart = FALSE;
+
+  /* Build the per-cell SubgridMarker (grid-ownership map the photon transport
+   * uses for grid-to-grid handoff).  Normally done inside RebuildHierarchy;
+   * the photon walk dereferences it, so it must exist. */
+  SetSubgridMarker(p->MetaData, p->LevelArray, level, FALSE);
+
+  /* Size the photon timestep (light-crossing / CFL based) without disturbing
+   * the source list. */
+  RadiativeTransferComputeTimestep(p->LevelArray, &p->MetaData, 0.0, level);
+
   HierarchyEntry **Grids;
   int n = GenerateGridArray(p->LevelArray, level, &Grids);
   FLOAT GridTime = (n > 0)
     ? Grids[0]->GridData->ReturnTime() + Grids[0]->GridData->ReturnTimeStep()
     : p->MetaData.Time;
   delete[] Grids;
-  /* The radiation-source list is normally (re)built each step by EvolveLevel via
-   * StarParticleInitialize + RadiativeTransferPrepare, which need more
-   * EvolveLevel state than the minimal session provides.  Here we drive the
-   * transport directly on whatever sources RadiativeTransferInitialize set up;
-   * the photon-transport physics itself is certified separately via the
-   * ray-tracer grid bridges (enzomodules_raytrace_*). */
+
   Star *AllStars = NULL;
-  /* LoopTime=0: take a single radiation step rather than sub-cycling the
-   * photon time all the way up to GridTime (which can be a huge loop). */
-  int rc = EvolvePhotons(&p->MetaData, p->LevelArray, AllStars, GridTime, level, 0);
+  /* LoopTime=1: sub-cycle PhotonTime up to GridTime in dtPhoton steps so the
+   * sources emit (the first sub-cycle just advances PhotonTime past the source
+   * creation time; subsequent ones deposit). */
+  int rc = EvolvePhotons(&p->MetaData, p->LevelArray, AllStars, GridTime, level, 1);
   return (rc == FAIL) ? 1 : 0;
 #else
   return 0;

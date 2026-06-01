@@ -265,9 +265,18 @@ The headline guarantee (`tests/test_session.py`): the Python-driven loop
 reproduces `EvolveHierarchy` **bit-for-bit** on the Toro-1 shock tube
 (`Linf = 0`) and matches the exact Riemann solution — the equivalence that lets
 `EvolveLevel` be re-implemented step-by-step on top of these certified bridges
-and verified at every stage.  The gravity, particle and radiation steps run on
-the live hierarchy; their physics is certified in the dedicated bridge tests
-(`test_gravity.py`, `test_particles.py`, `test_radiation.py`).
+and verified at every stage.  The gravity and particle steps run on the live
+hierarchy; their physics is certified in the dedicated bridge tests
+(`test_gravity.py`, `test_particles.py`).
+
+`evolve_photons` is **fully emitting**: it builds the `SubgridMarker`
+grid-ownership map, sizes the photon timestep, and sub-cycles the photon time so
+the parameter-file sources actually radiate — depositing photo-ionization /
+heating rates and coupling to the chemistry.  `tests/test_session.py` drives the
+`PhotonTest` Strömgren-sphere problem through the session and checks that the
+ionization front propagates (the ionized fraction grows monotonically, the
+illuminated volume expands) — the full `EvolvePhotons` orchestration, not just
+the ray-tracer kernels (which are separately certified in `test_radiation.py`).
 
 #### Writing EvolveLevel itself in Python
 
@@ -285,14 +294,21 @@ with Session("run/Hydro/Hydro-2D/ImplosionAMR/ImplosionAMR.enzo") as s:
     print(s.grid(0).field("Density"))
 ```
 
+`evolve_level` / `run_amr` take `gravity=True` (run the self-gravity chain each
+step) and `radiation=True` (emit + transport photons each step), so the same
+Python driver does gravitating, radiation-hydrodynamic AMR runs.
+
 `tests/test_session.py` runs this on the 4-level `ImplosionAMR` problem — the
 recursion, sub-cycling, flux correction, projection and regridding all fire (the
 hierarchy grows from `[1,1,1,1]` to hundreds of subgrids) — and the result
 matches Enzo's own `EvolveHierarchy` on the root grid to `L1 ~ 4e-5`, with the
-mean density (a conservation proxy) agreeing to six figures.  In other words,
-the whole AMR time integrator — `enzo.C`, `EvolveHierarchy`, *and* the recursive
-`EvolveLevel` — can now be written in Python on top of EnzoModules, with each
-step verified against the legacy reference.
+mean density (a conservation proxy) agreeing to six figures.  It also drives the
+coupled radiation-hydrodynamics problem `PhotonTestAMR` (hydro + RT + AMR) with
+`radiation=True`, ionizing the medium as the hydro and regridding run.  In other
+words, the whole AMR time integrator — `enzo.C`, `EvolveHierarchy`, *and* the
+recursive `EvolveLevel`, including self-gravity and radiative transfer — can now
+be written in Python on top of EnzoModules, with each step verified against the
+legacy reference.
 
 - **Multi-grid (AMR) photon transport** (`bridge.raytrace_twogrid`) — a ray
   crossing two tiled grids (the legacy `SubgridMarker` -> `FindPhotonNewGrid`
