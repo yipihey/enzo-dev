@@ -33,6 +33,27 @@ FIELD_NAMES = {
 NAME_TO_FIELD = {v: k for k, v in FIELD_NAMES.items()}
 
 
+import contextlib
+
+
+@contextlib.contextmanager
+def _suppress_fd_output():
+    """Redirect C-level stdout/stderr (fd 1/2) to /dev/null -- EvolveHierarchy
+    prints a per-cycle log we don't want in test output."""
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    saved = (os.dup(1), os.dup(2))
+    try:
+        os.dup2(devnull, 1)
+        os.dup2(devnull, 2)
+        yield
+    finally:
+        os.dup2(saved[0], 1)
+        os.dup2(saved[1], 2)
+        os.close(saved[0])
+        os.close(saved[1])
+        os.close(devnull)
+
+
 def available() -> bool:
     return bridge.grid_available()
 
@@ -44,6 +65,9 @@ def _lib():
         ip = ctypes.POINTER(ctypes.c_int)
         lib.enzomodules_init_problem.restype = ctypes.c_void_p
         lib.enzomodules_init_problem.argtypes = [ctypes.c_char_p]
+        lib.enzomodules_evolve_problem.restype = ctypes.c_void_p
+        lib.enzomodules_evolve_problem.argtypes = [
+            ctypes.c_char_p, ctypes.c_double, ctypes.c_int]
         for fn in ("num_grids", "grid_rank", "num_fields", "grid_size",
                    "problemtype", "num_particles"):
             f = getattr(lib, "enzomodules_problem_" + fn)
@@ -120,14 +144,20 @@ class GridView:
 class Problem:
     """Initialized Enzo problem (a grid hierarchy) built from a parameter file."""
 
-    def __init__(self, paramfile: str, workdir: Optional[str] = None):
+    def __init__(self, paramfile: str, workdir: Optional[str] = None,
+                 evolve: bool = False, stop_time: float = 0.0,
+                 stop_cycle: int = 0):
+        """Initialize a problem from ``paramfile``.  If ``evolve`` is True, also
+        run Enzo's full time integration (EvolveHierarchy) to ``stop_time`` /
+        ``stop_cycle`` (0 = use the parameter file's value); the resulting
+        handle holds the *evolved* hierarchy."""
         if not available():
             raise RuntimeError(
                 f"grid solver library not built ({bridge.grid_libpath()}); "
                 "run EnzoModules/deps/build_grid.sh")
         self._lib = _lib()
         paramfile = os.path.abspath(paramfile)
-        # InitializeNew writes OutputLog etc. to cwd; isolate it.
+        # InitializeNew / EvolveHierarchy write log + dump files to cwd; isolate.
         self._tmp = None
         cwd = os.getcwd()
         if workdir is None:
@@ -135,11 +165,17 @@ class Problem:
             workdir = self._tmp.name
         try:
             os.chdir(workdir)
-            self._h = self._lib.enzomodules_init_problem(paramfile.encode())
+            if evolve:
+                with _suppress_fd_output():       # quiet the cycle log
+                    self._h = self._lib.enzomodules_evolve_problem(
+                        paramfile.encode(), float(stop_time), int(stop_cycle))
+            else:
+                self._h = self._lib.enzomodules_init_problem(paramfile.encode())
         finally:
             os.chdir(cwd)
         if not self._h:
-            raise RuntimeError(f"InitializeNew failed for {paramfile}")
+            verb = "EvolveHierarchy" if evolve else "InitializeNew"
+            raise RuntimeError(f"{verb} failed for {paramfile}")
 
     @property
     def problem_type(self) -> int:

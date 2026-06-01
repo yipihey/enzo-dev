@@ -30,10 +30,20 @@
 #include "Grid.h"
 #include "Hierarchy.h"
 #include "TopGridData.h"
+#include "LevelHierarchy.h"
 
+class ImplicitProblemABC;
+extern "C" void enzomodules_init_timer();
 int CommunicationInitialize(Eint32 *argc, char **argv[]);
 int InitializeNew(char *filename, HierarchyEntry &TopGrid, TopGridData &MetaData,
                   ExternalBoundary &Exterior, float *Initialdt);
+void AddLevel(LevelHierarchyEntry *Array[], HierarchyEntry *Grid, int level);
+int EvolveHierarchy(HierarchyEntry &TopGrid, TopGridData &MetaData,
+                    ExternalBoundary *Exterior,
+#ifdef TRANSFER
+                    ImplicitProblemABC *ImplicitSolver,
+#endif
+                    LevelHierarchyEntry *LevelArray[], float Initialdt);
 
 struct EMProblem {
   HierarchyEntry TopGrid;
@@ -82,6 +92,59 @@ void *enzomodules_init_problem(const char *paramfile)
   int rc = InitializeNew(fname, p->TopGrid, p->MetaData, p->Exterior, &p->dt);
   free(fname);
   if (rc == FAIL) { delete p; return NULL; }
+
+  collect_grids(&p->TopGrid, p->grids);
+  return (void *)p;
+}
+
+/* Initialize a problem, then run Enzo's full time integration
+ * (EvolveHierarchy: per-grid timesteps, boundary conditions, the hydro/MHD/
+ * gravity solvers, AMR sub-cycling, flux correction and projection) until
+ * StopTime/StopCycle.  stop_time>0 / stop_cycle>0 override the parameter file.
+ * Data dumps are suppressed.  Returns the evolved-hierarchy handle (read with
+ * the same accessors), or NULL on failure. */
+void *enzomodules_evolve_problem(const char *paramfile, double stop_time,
+                                 int stop_cycle)
+{
+  static bool comm_done = false;
+  if (!comm_done) {
+    int argc = 1;
+    static char arg0[] = "enzomodules";
+    static char *argv_storage[2] = { arg0, NULL };
+    char **argv = argv_storage;
+    CommunicationInitialize(&argc, &argv);
+    comm_done = true;
+  }
+
+  EMProblem *p = new EMProblem();
+  p->TopGrid.NextGridThisLevel = NULL;
+  p->TopGrid.NextGridNextLevel = NULL;
+  p->TopGrid.ParentGrid        = NULL;
+  p->TopGrid.GridData          = NULL;
+
+  char *fname = strdup(paramfile);
+  int rc = InitializeNew(fname, p->TopGrid, p->MetaData, p->Exterior, &p->dt);
+  free(fname);
+  if (rc == FAIL) { delete p; return NULL; }
+
+  enzomodules_init_timer();              /* EvolveHierarchy uses TIMER_START */
+  if (stop_time  > 0.0) p->MetaData.StopTime  = stop_time;
+  if (stop_cycle > 0)   p->MetaData.StopCycle = stop_cycle;
+  p->MetaData.dtDataDump        = 0.0;   /* 0 = never (suppress output) */
+  p->MetaData.CycleSkipDataDump = 0;
+
+  LevelHierarchyEntry *LevelArray[MAX_DEPTH_OF_HIERARCHY];
+  for (int l = 0; l < MAX_DEPTH_OF_HIERARCHY; l++) LevelArray[l] = NULL;
+  AddLevel(LevelArray, &p->TopGrid, 0);
+
+  if (EvolveHierarchy(p->TopGrid, p->MetaData, &p->Exterior,
+#ifdef TRANSFER
+                      NULL,
+#endif
+                      LevelArray, p->dt) == FAIL) {
+    delete p;
+    return NULL;
+  }
 
   collect_grids(&p->TopGrid, p->grids);
   return (void *)p;

@@ -96,4 +96,4 @@ jobs:
             tests/test_hydro_rk.py tests/test_zeus.py \
             tests/test_particles.py tests/test_radiation.py \
             tests/test_gravity.py tests/test_problems.py tests/test_ppm_hydro.py \
-            tests/test_problem_fixtures.py tests/test_chemistry.py tests/test_amr.py tests/test_mhdct.py tests/test_hierarchy.py
+            tests/test_problem_fixtures.py tests/test_chemistry.py tests/test_amr.py tests/test_mhdct.py tests/test_hierarchy.py tests/test_evolve.py

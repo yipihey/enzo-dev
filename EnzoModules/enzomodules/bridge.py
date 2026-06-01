@@ -473,6 +473,34 @@ def flag_cells(rank, dims, density, method=FLAG_SLOPE, threshold=0.3,
     return [c_flag[i] for i in range(size)], c_count.value
 
 
+def compute_timestep(rank, dims, density, energy, u=None, v=None, w=None,
+                     courant=0.4, gamma=1.4, dx=1.0):
+    """CFL hydro timestep (legacy grid::ComputeTimeStep): returns
+    ``courant * dx / (|v| + c_s)`` for the given uniform-ish state.  ``density``
+    and ``energy`` (specific total energy) are full fields."""
+    lib = _load_gridlib()
+    if not hasattr(lib, "_dt_set"):
+        d = ctypes.POINTER(ctypes.c_double)
+        ip = ctypes.POINTER(ctypes.c_int)
+        lib.enzomodules_compute_timestep.restype = ctypes.c_double
+        lib.enzomodules_compute_timestep.argtypes = [
+            ctypes.c_int, ip, ctypes.c_double, ctypes.c_double, ctypes.c_double,
+            d, d, d, d, d]
+        lib._dt_set = True
+    size = len(density)
+    c_dims = (ctypes.c_int * 3)(int(dims[0]),
+                                int(dims[1]) if len(dims) > 1 else 1,
+                                int(dims[2]) if len(dims) > 2 else 1)
+    zero = [0.0] * size
+
+    def arr(a):
+        return (ctypes.c_double * size)(*[float(x) for x in (a if a is not None else zero)])
+
+    return lib.enzomodules_compute_timestep(
+        int(rank), c_dims, float(dx), float(courant), float(gamma),
+        arr(density), arr(energy), arr(u), arr(v), arr(w))
+
+
 def flag_region(dims, region_left, region_right, dx=1.0):
     """AMR must-refine-region flagging (CellFlaggingMethod 12, 3D only) -- flag
     every cell inside the box [region_left, region_right] (domain coords).

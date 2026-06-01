@@ -29,6 +29,8 @@
 #include "TopGridData.h"
 
 int SetDefaultGlobalValues(TopGridData &MetaData);
+extern "C" void enzomodules_init_timer();
+
 int MultigridSolver(float *RHS, float *Solution, int Rank, int TopDims[],
                     float &norm, float &mean, int start_depth,
                     float tolerance, int max_iter);
@@ -211,3 +213,37 @@ int enzomodules_rt_identify(int idim, int nghost, double dx,
 }
 
 } /* extern "C" */
+
+/* CFL timestep for a uniform hydro state: grid::ComputeTimeStep() returns
+ * CourantSafetyNumber * dx / (|v| + c_s).  Returns dt. */
+extern "C" double enzomodules_compute_timestep(
+    int rank, int dims[], double dx, double courant, double gamma,
+    double *d, double *e, double *u, double *v, double *w)
+{
+  TopGridData MetaData;
+  SetDefaultGlobalValues(MetaData);
+  enzomodules_init_timer();
+  ComovingCoordinates = 0;
+  HydroMethod         = PPM_DirectEuler;
+  UseHydro            = 1;
+  DualEnergyFormalism = 0;
+  Gamma               = gamma;
+  NumberOfGhostZones  = 3;
+  grid g;
+  FLOAT left[3], right[3];
+  for (int dd = 0; dd < 3; dd++) {
+    left[dd]  = 0.0;
+    right[dd] = (dd < rank) ? (FLOAT)((dims[dd] - 2 * NumberOfGhostZones) * dx)
+                            : (FLOAT)1.0;
+  }
+  int ft[5] = { Density, TotalEnergy, Velocity1, Velocity2, Velocity3 };
+  g.EnzoModulesSetupGrid(rank, dims, left, right, 5, ft, 0.0);
+  g.SetHydroParameters((float)courant, 0, 0, 0);   /* per-grid CourantSafetyNumber */
+  g.EnzoModulesSetField(g.EnzoModulesFieldIndex(Density),     d);
+  g.EnzoModulesSetField(g.EnzoModulesFieldIndex(TotalEnergy), e);
+  g.EnzoModulesSetField(g.EnzoModulesFieldIndex(Velocity1),   u);
+  g.EnzoModulesSetField(g.EnzoModulesFieldIndex(Velocity2),   v);
+  g.EnzoModulesSetField(g.EnzoModulesFieldIndex(Velocity3),   w);
+  return (double) g.ComputeTimeStep();
+}
+

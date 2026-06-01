@@ -174,6 +174,14 @@ This is the foundation for wrapping chemistry and the photon transport solver
   `IdentifyNewSubgridsBySignature`).  The remaining criteria (particle mass,
   cooling time, optical depth, resistive length, metallicity, metal mass)
   dispatch through the same path once their fields/globals are set.
+- **Time integration** (`bridge.compute_timestep`, `problems.Problem(...,
+  evolve=True)`) -- the CFL timestep (`grid::ComputeTimeStep`, certified =
+  courant*dx/(|v|+c_s)) and Enzo's full AMR time integrator
+  (`EvolveHierarchy`: per-grid timesteps -> boundary conditions -> the
+  hydro/MHD/gravity solvers -> AMR sub-cycling -> flux correction ->
+  projection -> hierarchy rebuild, looped to StopTime).  `tests/test_evolve.py`
+  evolves the Toro-1 shock tube end-to-end and matches the exact Riemann
+  solution (L1 ~ 3e-3).
 - **AMR hierarchy operators** (`bridge.project_to_parent`,
   `bridge.interpolate_to_child`, `bridge.correct_refined_fluxes`) -- the
   inter-grid operators between refinement levels: restriction
