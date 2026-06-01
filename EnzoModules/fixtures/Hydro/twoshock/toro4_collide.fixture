@@ -1,0 +1,25 @@
+# EnzoModules fixture
+kernel = twoshock
+name = toro4_collide
+idim = 1
+jdim = 1
+i1 = 1
+i2 = 1
+j1 = 1
+j2 = 1
+ipresfree = 0
+gravity = 0
+idual = 0
+dt = 0.0
+gamma = 1.4
+pmin = 1e-20
+eta1 = 0.0
+@dls 5.99924
+@drs 5.99242
+@pls 460.894
+@prs 46.095
+@uls 19.5975
+@urs -6.19633
+@grslice 0.0
+@pbar 1691.6469553991262
+@ubar 8.689774411632381
