@@ -2859,6 +2859,9 @@ int zEulerSweep(int j, int NumberOfSubgrids, fluxes *SubgridFluxes[],
     void EnzoModulesGetField(int field_index, double *data);
     int  EnzoModulesFieldIndex(int field_type);
     int  EnzoModulesGridSize();
+    // AMR: copy the refinement FlaggingField in / out (int per cell).
+    void EnzoModulesSetFlagging(const int *data);
+    void EnzoModulesGetFlagging(int *data);
     // Particles (full-grid support for particle-mesh / deposit tests).
     int  EnzoModulesSetupParticles(int n, int num_attributes);
     void EnzoModulesSetParticlePosition(int dim, const double *data);

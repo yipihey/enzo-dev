@@ -422,6 +422,66 @@ def raytrace_uniform(hi_density, energy=14.0, photons=1e50, path_fraction=0.3,
     return pf[0], rf[0], ks[0]
 
 
+def flag_cells(rank, dims, density, slope_threshold=0.3, dx=1.0):
+    """AMR cell flagging by density slope (legacy grid::SetFlaggingField).
+
+    ``density`` is the flat field (length prod(dims), incl. ghosts).  Returns
+    ``(flagging, count)`` -- the int FlaggingField (1 = flagged) and the number
+    of flagged cells.
+    """
+    lib = _load_gridlib()
+    if not hasattr(lib, "_flag_set"):
+        d = ctypes.POINTER(ctypes.c_double)
+        ip = ctypes.POINTER(ctypes.c_int)
+        lib.enzomodules_flag_cells.restype = ctypes.c_int
+        lib.enzomodules_flag_cells.argtypes = [
+            ctypes.c_int, ip, ctypes.c_double, d, ctypes.c_double, ip, ip]
+        lib._flag_set = True
+    c_dims = (ctypes.c_int * 3)(int(dims[0]),
+                                int(dims[1]) if len(dims) > 1 else 1,
+                                int(dims[2]) if len(dims) > 2 else 1)
+    size = len(density)
+    c_dens = (ctypes.c_double * size)(*[float(x) for x in density])
+    c_flag = (ctypes.c_int * size)()
+    c_count = ctypes.c_int(0)
+    rc = lib.enzomodules_flag_cells(int(rank), c_dims, float(dx), c_dens,
+                                    float(slope_threshold), c_flag,
+                                    ctypes.byref(c_count))
+    if rc != 0:
+        raise RuntimeError(f"enzomodules_flag_cells returned {rc}")
+    return [c_flag[i] for i in range(size)], c_count.value
+
+
+def cluster(rank, dims, flagging, dx=1.0, max_sub=200):
+    """Cluster a flagging field into rectangular subgrids (Berger-Rigoutsos
+    via ProtoSubgrid + IdentifyNewSubgridsBySignature).
+
+    ``flagging`` is the int FlaggingField (length prod(dims)).  Returns a list
+    of subgrid boxes, each ``[(xlo,xhi),(ylo,yhi),(zlo,zhi)]`` in active-cell
+    indices -- one per generated child grid.
+    """
+    lib = _load_gridlib()
+    if not hasattr(lib, "_cluster_set"):
+        ip = ctypes.POINTER(ctypes.c_int)
+        lib.enzomodules_cluster.restype = ctypes.c_int
+        lib.enzomodules_cluster.argtypes = [
+            ctypes.c_int, ip, ctypes.c_double, ip, ip, ip, ctypes.c_int]
+        lib._cluster_set = True
+    c_dims = (ctypes.c_int * 3)(int(dims[0]),
+                                int(dims[1]) if len(dims) > 1 else 1,
+                                int(dims[2]) if len(dims) > 2 else 1)
+    c_flag = (ctypes.c_int * len(flagging))(*[int(x) for x in flagging])
+    c_nsub = ctypes.c_int(0)
+    c_boxes = (ctypes.c_int * (6 * max_sub))()
+    rc = lib.enzomodules_cluster(int(rank), c_dims, float(dx), c_flag,
+                                 ctypes.byref(c_nsub), c_boxes, int(max_sub))
+    if rc != 0:
+        raise RuntimeError(f"enzomodules_cluster returned {rc}")
+    n = min(c_nsub.value, max_sub)
+    return [[(c_boxes[s * 6 + 2 * d], c_boxes[s * 6 + 2 * d + 1])
+             for d in range(3)] for s in range(n)]
+
+
 def ppm_hydro_step(rank, dims, d, e, u, v, w, dx, dt, gamma):
     """One full multi-dimensional PPM hydro step (legacy
     grid::SolveHydroEquations -> x/y/z Euler sweeps).

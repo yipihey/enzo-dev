@@ -92,6 +92,18 @@ int grid::EnzoModulesFieldIndex(int field_type)
   return FindField(field_type, FieldType, NumberOfBaryonFields);
 }
 
+void grid::EnzoModulesSetFlagging(const int *data)
+{
+  int size = this->EnzoModulesGridSize();
+  for (int i = 0; i < size; i++) FlaggingField[i] = data[i];
+}
+
+void grid::EnzoModulesGetFlagging(int *data)
+{
+  int size = this->EnzoModulesGridSize();
+  for (int i = 0; i < size; i++) data[i] = FlaggingField[i];
+}
+
 /* ---- Particles -------------------------------------------------------- */
 
 int grid::EnzoModulesSetupParticles(int n, int num_attributes)

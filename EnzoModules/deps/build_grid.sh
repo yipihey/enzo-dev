@@ -44,16 +44,16 @@ defines="$(cd "${enzo_src}" && make -s show-flags 2>/dev/null | sed -n 's/^DEFIN
 CXX="${CXX:-g++}"
 inc="-I${enzo_src} -I${enzo_src}/hydro_rk -I/usr/include/hdf5/serial"
 
-for src in Grid_EnzoModulesFixture enzomodules_grid_bridge enzomodules_problem_bridge enzomodules_chemistry_bridge enzomodules_radiation_bridge enzomodules_ppm_grid_bridge enzomodules_timing_init; do
+for src in Grid_EnzoModulesFixture enzomodules_grid_bridge enzomodules_problem_bridge enzomodules_chemistry_bridge enzomodules_radiation_bridge enzomodules_ppm_grid_bridge enzomodules_timing_init enzomodules_amr_bridge; do
   echo "[build_grid] CXX ${src}.C"
   ${CXX} ${defines} ${inc} -fPIC -O2 -c "${enzo_src}/${src}.C" -o "${here}/${src}.o"
 done
 
 echo "[build_grid] LD ${out}"
 ${CXX} -shared -fPIC -o "${out}" \
-    "${here}/Grid_EnzoModulesFixture.o" "${here}/enzomodules_grid_bridge.o" "${here}/enzomodules_problem_bridge.o" "${here}/enzomodules_chemistry_bridge.o" "${here}/enzomodules_radiation_bridge.o" "${here}/enzomodules_ppm_grid_bridge.o" "${here}/enzomodules_timing_init.o" \
+    "${here}/Grid_EnzoModulesFixture.o" "${here}/enzomodules_grid_bridge.o" "${here}/enzomodules_problem_bridge.o" "${here}/enzomodules_chemistry_bridge.o" "${here}/enzomodules_radiation_bridge.o" "${here}/enzomodules_ppm_grid_bridge.o" "${here}/enzomodules_timing_init.o" "${here}/enzomodules_amr_bridge.o" \
     -L"${enzo_src}" -l"${libname}" -lhdf5_serial -lz -lgfortran \
     -Wl,-rpath,"${enzo_src}"
-rm -f "${here}/Grid_EnzoModulesFixture.o" "${here}/enzomodules_grid_bridge.o" "${here}/enzomodules_problem_bridge.o" "${here}/enzomodules_chemistry_bridge.o" "${here}/enzomodules_radiation_bridge.o" "${here}/enzomodules_ppm_grid_bridge.o" "${here}/enzomodules_timing_init.o"
+rm -f "${here}/Grid_EnzoModulesFixture.o" "${here}/enzomodules_grid_bridge.o" "${here}/enzomodules_problem_bridge.o" "${here}/enzomodules_chemistry_bridge.o" "${here}/enzomodules_radiation_bridge.o" "${here}/enzomodules_ppm_grid_bridge.o" "${here}/enzomodules_timing_init.o" "${here}/enzomodules_amr_bridge.o"
 
 echo "[build_grid] OK -> ${out}"

@@ -161,6 +161,13 @@ reads the result back.  Certified on this infrastructure so far:
 This is the foundation for wrapping chemistry and the photon transport solver
 — they reuse the same primitives; see `docs/WRAPPING.md`.
 
+- **AMR control** (`bridge.flag_cells`, `bridge.cluster`) -- cell flagging
+  (`grid::SetFlaggingField`, by density slope) and clustering flagged cells
+  into child grids (Berger-Rigoutsos via `ProtoSubgrid` +
+  `IdentifyNewSubgridsBySignature`).  `tests/test_amr.py` checks that a density
+  jump flags the right cells and that separated flagged blocks cluster into
+  disjoint, minimal subgrids.
+
 ### Problem setup / initial conditions (all problem types)
 
 `enzomodules.problems` drives Enzo's own `InitializeNew`, which reads a `.enzo`
