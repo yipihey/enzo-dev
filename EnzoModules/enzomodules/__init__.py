@@ -16,12 +16,12 @@ from __future__ import annotations
 
 import os
 
-from . import bridge, diff, examples, fixtures, hydro
+from . import bridge, diff, examples, fixtures, hydro, problems
 from .diff import BITWISE, CompareResult, Tolerance, compare, isclose
 from .fixtures import Fixture, load_dir, load_fixture, save_fixture
 
 __all__ = [
-    "bridge", "diff", "examples", "fixtures", "hydro",
+    "bridge", "diff", "examples", "fixtures", "hydro", "problems",
     "Tolerance", "BITWISE", "CompareResult", "compare", "isclose",
     "Fixture", "load_fixture", "load_dir", "save_fixture",
     "fixturedir", "has_library",

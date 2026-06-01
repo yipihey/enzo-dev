@@ -149,6 +149,31 @@ reads the result back.  Certified on this infrastructure so far:
 This is the foundation for wrapping chemistry and the photon transport solver
 — they reuse the same primitives; see `docs/WRAPPING.md`.
 
+### Problem setup / initial conditions (all problem types)
+
+`enzomodules.problems` drives Enzo's own `InitializeNew`, which reads a `.enzo`
+parameter file and dispatches on `ProblemType` to **every** problem generator —
+so one wrapper produces the initial conditions of *any* Enzo problem type and
+exposes the resulting grid hierarchy:
+
+```python
+from enzomodules.problems import Problem
+with Problem("run/Hydro/Hydro-1D/Toro-1-ShockTube/Toro-1-ShockTube.enzo") as p:
+    g = p.grid(0)                       # walk the hierarchy
+    rho = g.field("Density")            # flat field data (incl. ghost zones)
+    print(p.problem_type, g.rank, g.dims, g.field_names, g.num_particles)
+```
+
+`tests/test_problems.py` initializes a spread of problem types (Sod shock tube,
+Sedov blast, Implosion, Kelvin-Helmholtz, Noh) through the single dispatch and
+checks the generated fields — e.g. the Sod IC has the correct left/right
+density states.  This is exactly what a rewrite needs to cross-check its own
+initial-condition generators against the reference, problem by problem.
+
+> Self-contained (analytic) problems work directly; problem types that read
+> external data (e.g. cosmological initial-condition files) need that data
+> present, as in a normal Enzo run.
+
 > Still to do: the photon-transport ray-tracer (`grid::WalkPhotonPackage`)
 > needs units, HEALPix ray directions, the species + 7 rate fields, and
 > inter-grid transport — a larger subsystem, now buildable on this fixture;
