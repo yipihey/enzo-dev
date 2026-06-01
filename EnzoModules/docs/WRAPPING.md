@@ -133,20 +133,37 @@ solvers take primitives in the order `[rho, eint, vx, vy, vz]` (internal energy,
 *not* total), `[+Bx, By, Bz, Phi]` for MHD; the conserved energy is
 `rho*(eint + 0.5 v^2) + 0.5 B^2`. Always read the solver body to confirm.
 
-## Wrapping C++ `grid::` methods (ZEUS, the RK sweeps) — the next step
+## Wrapping C++ `grid::` methods (ZEUS, radiation, gravity) — the grid fixture
 
-ZEUS (`grid::ZeusSolver`, `grid::Zeus_xTransport`, …) and the full RK2 sweeps
-are **member functions** that read a constructed `grid` (`BaryonField`,
-`GridDimension`, `GridStartIndex`, boundary state) plus globals. The plan:
+ZEUS (`grid::ZeusSolver`), radiation transfer, gravity, etc. are **member
+functions** that read a constructed `grid` (`BaryonField`, `GridDimension`,
+`GridStartIndex`, boundary state) plus globals. The generic **grid-fixture
+infrastructure** handles the grid construction so you don't have to:
 
-1. Add a bridge shim that **constructs a minimal `grid`** — allocate
-   `BaryonField` for the needed fields, set `GridRank`/`GridDimension`/
-   `GridStartIndex`/`GridEndIndex`, identify field indices — fill it from flat
-   input arrays (the inverse of the slice copy in `Grid_xEulerSweep.C`), set the
-   required globals, call the method, then copy fields back out. This is the
-   same idea as the libyt `Grid_ConvertToLibyt` conversion.
-2. Reuse the existing `fixtures`/`diff` and an evolution driver to certify (e.g.
-   ZEUS on a Sod tube and the MHD RK sweep on Brio-Wu).
+`src/enzo/Grid_EnzoModulesFixture.C` adds these methods to the `grid` class
+(declared in `Grid.h` next to the libyt hooks; adding non-virtual methods does
+not change object layout, so they link against a prebuilt `libenzo`):
 
-This is more involved than the free functions (the grid fixture is the work),
-but the library + bridge + ctypes + driver infrastructure is already in place.
+- `EnzoModulesSetupGrid(rank, dims, left, right, nfields, field_types, dt)` —
+  set the field list, call `PrepareGrid` + `AllocateGrids`, set `dtFixed`, and
+  mark the grid local. Returns the cell count.
+- `EnzoModulesSetField(i, data)` / `EnzoModulesGetField(i, data)` — copy a field
+  in / out (flat `double` arrays).
+- `EnzoModulesFieldIndex(field_type)` — locate a field by `FieldType`.
+
+To wrap a new grid-method solver (e.g. an FLD radiation step or the Poisson
+solver), add an `extern "C"` shim to `enzomodules_grid_bridge.C` that:
+
+1. calls `SetDefaultGlobalValues(MetaData)` to seed every global, then overrides
+   the few the solver needs (e.g. `RadiativeTransferFLD`, `HydroMethod`, …);
+2. `EnzoModulesSetupGrid` with the field list the solver expects (add the right
+   `FieldType`s — `RadiationFreq0`, `Potential`, species densities, …);
+3. fills inputs via `EnzoModulesSetField`, calls the `grid::` method, reads
+   outputs via `EnzoModulesGetField`;
+4. is bound in `bridge.py`, driven by an `examples/` script, and certified
+   against an analytic/reference solution like the others.
+
+`enzomodules_zeus_sweep_1d` (+ `examples/zeus_sod.py`, `tests/test_zeus.py`) is
+the worked example. Multi-dimensional sweeps and the other solver families
+follow the same recipe — the fixture, bridge, ctypes, and driver scaffolding
+are all in place.

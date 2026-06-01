@@ -56,15 +56,16 @@ jobs:
         # The committed fixtures must match a fresh capture bit-for-bit.
         run: git diff --exit-code -- fixtures/
 
-      - name: Run replay + physics tests
-        run: python -m pytest -q -k "not hydro_rk"
+      - name: Run replay + physics tests (Fortran-kernel pilot only)
+        run: python -m pytest -q --ignore=tests/test_hydro_rk.py --ignore=tests/test_zeus.py
 
       - name: Demo (Sod vs exact Riemann)
         run: python tools/demo_sod.py
 
-  # Heavier job: the hydro_rk / Dedner-MHD solvers link against the full Enzo
-  # shared library, so this builds Enzo serially (HDF5, no MPI) before testing.
-  hydro_rk:
+  # Heavier job: the hydro_rk / Dedner-MHD and ZEUS solvers link against the
+  # full Enzo shared library, so this builds Enzo serially (HDF5, no MPI) once
+  # and then both C++ bridges before testing.
+  cxx_solvers:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -85,6 +86,9 @@ jobs:
       - name: Build Enzo shared library + hydro_rk bridge
         run: ./EnzoModules/deps/build_hydro_rk.sh
 
-      - name: Run hydro_rk + Dedner-MHD tests
+      - name: Build grid-method bridge (reuses the Enzo library)
+        run: ./EnzoModules/deps/build_grid.sh
+
+      - name: Run hydro_rk + Dedner-MHD + ZEUS tests
         working-directory: EnzoModules
-        run: python -m pytest tests/test_hydro_rk.py -q
+        run: python -m pytest tests/test_hydro_rk.py tests/test_zeus.py -q

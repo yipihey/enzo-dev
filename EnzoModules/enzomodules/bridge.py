@@ -209,6 +209,64 @@ def mhd_rk_line(solver, prim_rows, c_h, gamma=1.4, theta_limiter=1.5, nghost=3,
                       gamma, theta_limiter, nghost, small_rho, small_p)
 
 
+# --------------------------------------------------------------------------
+# Grid-method solvers (ZEUS, and later radiation transfer, gravity).
+#
+# These are grid:: *methods*; the bridge builds a minimal grid fixture and
+# calls the method.  Like the hydro_rk library, libenzomodules_grid.so links
+# against the full Enzo shared library.
+# --------------------------------------------------------------------------
+
+_GRID_DEFAULT = os.path.join(_HERE, "..", "deps", "libenzomodules_grid.so")
+_gridlib = None
+
+
+def grid_libpath():
+    env = os.environ.get("ENZOMODULES_GRID_LIB", "")
+    return os.path.abspath(env) if env else os.path.abspath(_GRID_DEFAULT)
+
+
+def grid_available():
+    return os.path.isfile(grid_libpath())
+
+
+def _load_gridlib():
+    global _gridlib
+    if _gridlib is None:
+        if not grid_available():
+            raise RuntimeError(
+                f"grid solver library not found at {grid_libpath()}.\n"
+                "Build it with EnzoModules/deps/build_grid.sh (needs the full "
+                "Enzo shared library), or set ENZOMODULES_GRID_LIB.")
+        lib = ctypes.CDLL(grid_libpath())
+        d = ctypes.POINTER(ctypes.c_double)
+        lib.enzomodules_zeus_sweep_1d.restype = ctypes.c_int
+        lib.enzomodules_zeus_sweep_1d.argtypes = [
+            d, d, d, ctypes.c_int, ctypes.c_int,
+            ctypes.c_double, ctypes.c_double, ctypes.c_double]
+        _gridlib = lib
+    return _gridlib
+
+
+def zeus_sweep_1d(d_arr, e_arr, u_arr, nghost, dx, dt, gamma):
+    """One ZEUS hydro update of a 1D slice (legacy grid::ZeusSolver).
+
+    ``d_arr`` (density), ``e_arr`` (specific *internal* energy), ``u_arr``
+    (x-velocity) are length ``idim = active + 2*nghost``.  Returns updated
+    ``(d, e, u)`` as new lists.
+    """
+    lib = _load_gridlib()
+    idim = len(d_arr)
+    cd = (ctypes.c_double * idim)(*[float(v) for v in d_arr])
+    ce = (ctypes.c_double * idim)(*[float(v) for v in e_arr])
+    cu = (ctypes.c_double * idim)(*[float(v) for v in u_arr])
+    rc = lib.enzomodules_zeus_sweep_1d(cd, ce, cu, idim, nghost,
+                                       float(dx), float(dt), float(gamma))
+    if rc != 0:
+        raise RuntimeError(f"enzomodules_zeus_sweep_1d returned {rc}")
+    return list(cd), list(ce), list(cu)
+
+
 def ppm_sweep_1d(dslice, eslice, uslice, vslice, wslice, pslice,
                  i1, i2, dx, dt, gamma, want_fluxes=False):
     """Direct binding to ``enzomodules_ppm_sweep_1d``.

@@ -88,7 +88,8 @@ library (`libenzomodules_hydrork.so`) cover this:
 
 ```bash
 ./deps/build_hydro_rk.sh    # builds Enzo as a serial .so (slow), then the bridge
-python -m pytest tests/test_hydro_rk.py -q
+./deps/build_grid.sh        # grid-method bridge (reuses the Enzo .so)
+python -m pytest tests/test_hydro_rk.py tests/test_zeus.py -q
 ```
 
 Wrapped and certified so far:
@@ -101,17 +102,37 @@ Wrapped and certified so far:
   HLLD (and HLL/LLF) + PLM MHD line solver with GLM cleaning.
   `examples.mhd_brio_wu` evolves the Brio & Wu shock tube and reproduces its
   structure while keeping the normal field `Bx` constant (divergence-free).
+- **ZEUS** (`enzomodules.bridge.zeus_sweep_1d`): the operator-split
+  finite-difference `grid::ZeusSolver`.  `examples.zeus_sod` evolves a Sod tube
+  and matches the exact solution (a bit more diffusive, as expected from ZEUS
+  artificial viscosity).
 
-The build fix that makes this possible (`MACH_SHARED_FLAGS`/`SHARED_OPT` for a
-non-macOS shared build) lives in `deps/build_hydro_rk.sh`.
+Two build fixes make this possible (both in `deps/`): `MACH_SHARED_FLAGS`/
+`SHARED_OPT` for a non-macOS Enzo shared build, and the grid-fixture methods on
+the `grid` class (below).
 
-> **Not yet wrapped — ZEUS and the RK integrator sweeps.**  ZEUS
-> (`grid::ZeusSolver`, `Zeus_*Transport`) and the full RK2 sweeps are `grid::`
-> *methods*: they read a fully constructed `grid` object, not plain arrays.
-> Wrapping them needs a grid-fixture builder (construct a minimal grid +
-> globals, call the method) — the libyt `Grid_ConvertToLibyt` pattern.  The
-> library and bridge infrastructure here is the foundation; see
-> `docs/WRAPPING.md` for the planned approach.
+### The grid-fixture infrastructure
+
+ZEUS is a `grid::` *method* — it reads a fully constructed `grid` object, not
+plain arrays.  Wrapping it (and any other grid-method solver) is done with a
+small, generic set of methods added to the `grid` class
+(`src/enzo/Grid_EnzoModulesFixture.C`, declared in `Grid.h` next to the libyt
+hooks):
+
+| method | purpose |
+|---|---|
+| `EnzoModulesSetupGrid(rank, dims, left, right, nfields, types, dt)` | dimensions, fields, allocation, timestep, mark local |
+| `EnzoModulesSetField` / `EnzoModulesGetField` | copy a field in / out |
+| `EnzoModulesFieldIndex(type)` | locate a field by `FieldType` |
+
+The grid bridge (`src/enzo/enzomodules_grid_bridge.C`) seeds globals with
+Enzo's own `SetDefaultGlobalValues`, builds a fixture, calls the method, and
+reads the result back.  **This is the foundation for wrapping radiation
+transfer, gravity/Poisson, chemistry, and the rest of the grid-method
+solvers** — they reuse the same primitives; see `docs/WRAPPING.md`.
+
+> Still to do: the multi-dimensional sweeps (y/z), and applying the grid
+> fixture to radiation transfer and gravity (the next solver families).
 
 ## The per-kernel workflow
 

@@ -2844,7 +2844,21 @@ int zEulerSweep(int j, int NumberOfSubgrids, fluxes *SubgridFluxes[],
 #endif
 #ifdef USE_LIBYT
     void ConvertToLibyt(int LocalGridID, int GlobalGridID, int ParentID, int level, yt_grid &GridInfo);
-#endif 
+#endif
+
+//------------------------------------------------------------------------
+// EnzoModules unit-test fixture support (see EnzoModules/).
+//   Build a minimal, self-contained grid from flat arrays so a single grid::
+//   solver method can be exercised in isolation, and copy fields back out.
+//   These are the generic primitives the EnzoModules grid bridge uses to wrap
+//   any grid-method solver (ZEUS, radiation transfer, gravity, ...).
+//------------------------------------------------------------------------
+    int  EnzoModulesSetupGrid(int rank, int dims[], FLOAT left[], FLOAT right[],
+                              int num_fields, int field_types[], double dt);
+    void EnzoModulesSetField(int field_index, const double *data);
+    void EnzoModulesGetField(int field_index, double *data);
+    int  EnzoModulesFieldIndex(int field_type);
+    int  EnzoModulesGridSize();
 //------------------------------------------------------------------------
 // Methods for star formation
 //------------------------------------------------------------------------

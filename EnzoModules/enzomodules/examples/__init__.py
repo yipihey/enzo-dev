@@ -6,6 +6,6 @@
   only ``enzomodules.hydro.ppm_sweep_1d`` -- the reference for how a downstream
   rewrite would orchestrate the wrapped kernels.
 """
-from . import hydro_rk_sod, mhd_brio_wu, ppm_sod, riemann
+from . import hydro_rk_sod, mhd_brio_wu, ppm_sod, riemann, zeus_sod
 
-__all__ = ["riemann", "ppm_sod", "hydro_rk_sod", "mhd_brio_wu"]
+__all__ = ["riemann", "ppm_sod", "hydro_rk_sod", "mhd_brio_wu", "zeus_sod"]
