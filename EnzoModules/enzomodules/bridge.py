@@ -248,6 +248,75 @@ def _load_gridlib():
     return _gridlib
 
 
+def cic_deposit(particles, dims, left=(0.0, 0.0, 0.0), right=(1.0, 1.0, 1.0)):
+    """CIC-deposit particles onto a 3D grid (legacy grid::DepositParticlePositions).
+
+    ``particles`` is a list of ``(x, y, z, mass)``.  ``dims`` is the active
+    ``(nx, ny, nz)``.  Returns ``(field, cellvol)`` where ``field`` is the
+    deposited gravitating-mass field (a flat list, including the gravity
+    buffer) and ``cellvol`` is its cell volume.  The deposit is linear and
+    conservative; the absolute mass scale follows Enzo's particle-mass unit
+    convention, so tests use ratios / invariants.
+    """
+    lib = _load_gridlib()
+    if not hasattr(lib, "_cic_set"):
+        d = ctypes.POINTER(ctypes.c_double)
+        ip = ctypes.POINTER(ctypes.c_int)
+        lib.enzomodules_cic_deposit.restype = ctypes.c_int
+        lib.enzomodules_cic_deposit.argtypes = [
+            ctypes.c_int, ip, d, d, d, d, d, d, ctypes.c_int,
+            d, ctypes.c_int, ip, d]
+        lib._cic_set = True
+    n = len(particles)
+    c_dims = (ctypes.c_int * 3)(int(dims[0]), int(dims[1]), int(dims[2]))
+    c_left = (ctypes.c_double * 3)(*[float(v) for v in left])
+    c_right = (ctypes.c_double * 3)(*[float(v) for v in right])
+    px = (ctypes.c_double * n)(*[float(p[0]) for p in particles])
+    py = (ctypes.c_double * n)(*[float(p[1]) for p in particles])
+    pz = (ctypes.c_double * n)(*[float(p[2]) for p in particles])
+    mass = (ctypes.c_double * n)(*[float(p[3]) for p in particles])
+    cap = (max(dims) + 20) ** 3
+    out = (ctypes.c_double * cap)()
+    osize = ctypes.c_int(0)
+    ocv = ctypes.c_double(0.0)
+    rc = lib.enzomodules_cic_deposit(3, c_dims, c_left, c_right, px, py, pz,
+                                     mass, n, out, cap, ctypes.byref(osize),
+                                     ctypes.byref(ocv))
+    if rc != 0:
+        raise RuntimeError(f"enzomodules_cic_deposit returned {rc} "
+                           f"(size {osize.value} > capacity {cap}?)")
+    return [out[k] for k in range(osize.value)], ocv.value
+
+
+def rt_identify(kph_field, nghost=3, dx=0.05):
+    """Build a full grid carrying the radiative-transfer rate fields and run
+    Enzo's field identification (grid::IdentifyRadiativeTransferFields).
+
+    Proves the full-grid fixture supports radiation-transport data structures.
+    ``kph_field`` is the kphHI (photo-ionization rate) field; returns
+    ``(kphHI_out, kphHINum, gammaNum)`` — the round-tripped field and the
+    located field indices.
+    """
+    lib = _load_gridlib()
+    if not hasattr(lib, "_rt_set"):
+        d = ctypes.POINTER(ctypes.c_double)
+        ip = ctypes.POINTER(ctypes.c_int)
+        lib.enzomodules_rt_identify.restype = ctypes.c_int
+        lib.enzomodules_rt_identify.argtypes = [
+            ctypes.c_int, ctypes.c_int, ctypes.c_double, d, d, ip, ip]
+        lib._rt_set = True
+    idim = len(kph_field)
+    cin = (ctypes.c_double * idim)(*[float(v) for v in kph_field])
+    cout = (ctypes.c_double * idim)()
+    kn = ctypes.c_int(0)
+    gn = ctypes.c_int(0)
+    rc = lib.enzomodules_rt_identify(idim, nghost, float(dx), cin, cout,
+                                     ctypes.byref(kn), ctypes.byref(gn))
+    if rc != 0:
+        raise RuntimeError(f"enzomodules_rt_identify returned {rc}")
+    return [cout[i] for i in range(idim)], kn.value, gn.value
+
+
 def zeus_sweep_1d(d_arr, e_arr, u_arr, nghost, dx, dt, gamma):
     """One ZEUS hydro update of a 1D slice (legacy grid::ZeusSolver).
 

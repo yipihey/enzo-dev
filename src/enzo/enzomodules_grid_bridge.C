@@ -91,4 +91,84 @@ int enzomodules_zeus_sweep_1d(double *d, double *e, double *u,
   return (rc == FAIL) ? 1 : 0;
 }
 
+/* CIC-deposit particles onto a grid (the particle-mesh operation,
+ * grid::DepositParticlePositions).  Builds a full grid with NumberOfParticles
+ * particles at the given positions/masses, deposits to the gravitating mass
+ * field, and returns that field (mass density) plus its cell count and cell
+ * volume so callers can check CIC weights and mass conservation.
+ * out_field must have capacity >= the deposit-field cell count; the actual
+ * count is returned in *out_size.  Returns 0 on success. */
+int enzomodules_cic_deposit(int rank, int dims[], double left[], double right[],
+                            double *posx, double *posy, double *posz,
+                            double *mass, int nparticles,
+                            double *out_field, int out_capacity,
+                            int *out_size, double *out_cellvol)
+{
+  TopGridData MetaData;
+  SetDefaultGlobalValues(MetaData);
+  ComovingCoordinates = 0;
+  NumberOfGhostZones  = 3;
+  SelfGravity         = 1;
+
+  grid g;
+  FLOAT le[3], re[3];
+  for (int dim = 0; dim < 3; dim++) {
+    le[dim] = (dim < rank) ? (FLOAT)left[dim]  : (FLOAT)0.0;
+    re[dim] = (dim < rank) ? (FLOAT)right[dim] : (FLOAT)1.0;
+  }
+  int ftypes[1] = { Density };          /* one baryon field is enough */
+  g.EnzoModulesSetupGrid(rank, dims, le, re, 1, ftypes, 0.0);
+
+  g.EnzoModulesSetupParticles(nparticles, 0);
+  g.EnzoModulesSetParticleMass(mass);
+  g.EnzoModulesSetParticlePosition(0, posx);
+  if (rank > 1) g.EnzoModulesSetParticlePosition(1, posy);
+  if (rank > 2) g.EnzoModulesSetParticlePosition(2, posz);
+
+  int size = g.EnzoModulesDepositParticles();
+  if (size < 0 || size > out_capacity) { *out_size = size; return 1; }
+  g.EnzoModulesGetDepositField(out_field);
+  *out_size    = size;
+  *out_cellvol = g.EnzoModulesDepositCellVolume();
+  return 0;
+}
+
+/* Radiation transport: build a full grid carrying the radiative-transfer rate
+ * fields (kphHI photo-ionization, PhotoGamma photo-heating), run Enzo's field
+ * identification, and round-trip the kphHI field.  Proves the full-grid
+ * fixture supports radiation-transport data structures and Enzo's RT field
+ * machinery (the foundation for wrapping the photon-transport solver).
+ * kph_in/kph_out are length idim; returns 0 on success and writes the located
+ * field indices. */
+int enzomodules_rt_identify(int idim, int nghost, double dx,
+                            const double *kph_in, double *kph_out,
+                            int *kphHINum_out, int *gammaNum_out)
+{
+  TopGridData MetaData;
+  SetDefaultGlobalValues(MetaData);
+  RadiativeTransfer             = 1;
+  RadiativeTransferHydrogenOnly = 1;   /* only kphHI + PhotoGamma needed */
+  MultiSpecies                  = 1;
+  NumberOfGhostZones            = nghost;
+
+  grid g;
+  int   dims[3]  = { idim, 1, 1 };
+  FLOAT left[3]  = { (FLOAT)0.0, (FLOAT)0.0, (FLOAT)0.0 };
+  FLOAT right[3] = { (FLOAT)(dx * idim), (FLOAT)1.0, (FLOAT)1.0 };
+  int   ftypes[3] = { Density, kphHI, PhotoGamma };
+  g.EnzoModulesSetupGrid(1, dims, left, right, 3, ftypes, 0.0);
+
+  int ikph = g.EnzoModulesFieldIndex(kphHI);
+  g.EnzoModulesSetField(ikph, kph_in);
+
+  int kphHINum, gammaNum, kphHeINum, kphHeIINum, kdissH2INum, kphHMNum, kdissH2IINum;
+  int rc = g.IdentifyRadiativeTransferFields(kphHINum, gammaNum, kphHeINum,
+                                             kphHeIINum, kdissH2INum, kphHMNum,
+                                             kdissH2IINum);
+  *kphHINum_out = kphHINum;
+  *gammaNum_out = gammaNum;
+  g.EnzoModulesGetField(kphHINum, kph_out);
+  return (rc == FAIL) ? 1 : 0;
+}
+
 } /* extern "C" */

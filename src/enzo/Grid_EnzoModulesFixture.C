@@ -84,3 +84,81 @@ int grid::EnzoModulesFieldIndex(int field_type)
 {
   return FindField(field_type, FieldType, NumberOfBaryonFields);
 }
+
+/* ---- Particles -------------------------------------------------------- */
+
+int grid::EnzoModulesSetupParticles(int n, int num_attributes)
+{
+  NumberOfParticles = n;
+  NumberOfParticleAttributes = num_attributes;   /* global */
+  this->AllocateNewParticles(n);
+  for (int i = 0; i < n; i++) {
+    ParticleMass[i]   = 0.0;
+    ParticleNumber[i] = i;
+    ParticleType[i]   = PARTICLE_TYPE_DARK_MATTER;
+    for (int dim = 0; dim < GridRank; dim++) {
+      ParticlePosition[dim][i] = 0.0;
+      ParticleVelocity[dim][i] = 0.0;
+    }
+    for (int a = 0; a < num_attributes; a++)
+      ParticleAttribute[a][i] = 0.0;
+  }
+  return n;
+}
+
+void grid::EnzoModulesSetParticlePosition(int dim, const double *data)
+{
+  for (int i = 0; i < NumberOfParticles; i++)
+    ParticlePosition[dim][i] = (FLOAT)data[i];
+}
+
+void grid::EnzoModulesSetParticleVelocity(int dim, const double *data)
+{
+  for (int i = 0; i < NumberOfParticles; i++)
+    ParticleVelocity[dim][i] = (float)data[i];
+}
+
+void grid::EnzoModulesSetParticleMass(const double *data)
+{
+  for (int i = 0; i < NumberOfParticles; i++)
+    ParticleMass[i] = (float)data[i];
+}
+
+void grid::EnzoModulesGetParticlePosition(int dim, double *data)
+{
+  for (int i = 0; i < NumberOfParticles; i++)
+    data[i] = (double)ParticlePosition[dim][i];
+}
+
+/* CIC-deposit the grid's particles onto its own GravitatingMassFieldParticles
+ * (the standard particle-mesh operation), and expose the result for tests. */
+int grid::EnzoModulesDepositParticles()
+{
+  GravityBoundaryType = TopGridPeriodic;   /* deposit field at grid resolution */
+  this->InitializeGravitatingMassFieldParticles(1);
+  this->ClearGravitatingMassFieldParticles();
+  if (this->DepositParticlePositions(this, Time,
+                                     GRAVITATING_MASS_FIELD_PARTICLES) == FAIL)
+    return -1;
+  int size = 1;
+  for (int dim = 0; dim < GridRank; dim++)
+    size *= GravitatingMassFieldParticlesDimension[dim];
+  return size;
+}
+
+void grid::EnzoModulesGetDepositField(double *data)
+{
+  int size = 1;
+  for (int dim = 0; dim < GridRank; dim++)
+    size *= GravitatingMassFieldParticlesDimension[dim];
+  for (int i = 0; i < size; i++)
+    data[i] = (double)GravitatingMassFieldParticles[i];
+}
+
+double grid::EnzoModulesDepositCellVolume()
+{
+  double vol = 1.0;
+  for (int dim = 0; dim < GridRank; dim++)
+    vol *= (double)GravitatingMassFieldParticlesCellSize;
+  return vol;
+}

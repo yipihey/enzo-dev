@@ -2859,6 +2859,16 @@ int zEulerSweep(int j, int NumberOfSubgrids, fluxes *SubgridFluxes[],
     void EnzoModulesGetField(int field_index, double *data);
     int  EnzoModulesFieldIndex(int field_type);
     int  EnzoModulesGridSize();
+    // Particles (full-grid support for particle-mesh / deposit tests).
+    int  EnzoModulesSetupParticles(int n, int num_attributes);
+    void EnzoModulesSetParticlePosition(int dim, const double *data);
+    void EnzoModulesSetParticleVelocity(int dim, const double *data);
+    void EnzoModulesSetParticleMass(const double *data);
+    void EnzoModulesGetParticlePosition(int dim, double *data);
+    // CIC deposit of the grid's own particles -> GravitatingMassFieldParticles.
+    int    EnzoModulesDepositParticles();   // returns deposited-field cell count
+    void   EnzoModulesGetDepositField(double *data);
+    double EnzoModulesDepositCellVolume();
 //------------------------------------------------------------------------
 // Methods for star formation
 //------------------------------------------------------------------------

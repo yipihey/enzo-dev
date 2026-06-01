@@ -121,18 +121,33 @@ hooks):
 
 | method | purpose |
 |---|---|
-| `EnzoModulesSetupGrid(rank, dims, left, right, nfields, types, dt)` | dimensions, fields, allocation, timestep, mark local |
-| `EnzoModulesSetField` / `EnzoModulesGetField` | copy a field in / out |
-| `EnzoModulesFieldIndex(type)` | locate a field by `FieldType` |
+| `EnzoModulesSetupGrid(rank, dims, left, right, nfields, types, dt)` | dimensions, fields (any `FieldType`, incl. species & radiation), allocation, timestep, mark local |
+| `EnzoModulesSetField` / `EnzoModulesGetField` / `EnzoModulesFieldIndex` | copy a field in / out, locate by `FieldType` |
+| `EnzoModulesSetupParticles(n, nattr)` + position/velocity/mass setters | a **full grid** with particles |
+| `EnzoModulesDepositParticles` / `GetDepositField` | run CIC particle-mesh deposit and read it back |
 
 The grid bridge (`src/enzo/enzomodules_grid_bridge.C`) seeds globals with
 Enzo's own `SetDefaultGlobalValues`, builds a fixture, calls the method, and
-reads the result back.  **This is the foundation for wrapping radiation
-transfer, gravity/Poisson, chemistry, and the rest of the grid-method
-solvers** — they reuse the same primitives; see `docs/WRAPPING.md`.
+reads the result back.  Certified on this infrastructure so far:
 
-> Still to do: the multi-dimensional sweeps (y/z), and applying the grid
-> fixture to radiation transfer and gravity (the next solver families).
+- **ZEUS** (`bridge.zeus_sweep_1d`) — `grid::ZeusSolver`, Sod vs exact.
+- **Particles / CIC deposit** (`bridge.cic_deposit`) —
+  `grid::DepositParticlePositions`.  `tests/test_particles.py` certifies the
+  cloud-in-cell invariants (a particle equidistant from 8 cells splits 1/8
+  each, plus linearity, additivity, and mass conservation independent of
+  position).
+- **Radiation-transport fields** (`bridge.rt_identify`) — a grid carrying the
+  `kphHI`/`PhotoGamma` rate fields, identified by
+  `grid::IdentifyRadiativeTransferFields` and round-tripped
+  (`tests/test_radiation.py`).
+
+This is the foundation for wrapping gravity/Poisson, chemistry, and the photon
+transport solver — they reuse the same primitives; see `docs/WRAPPING.md`.
+
+> Still to do: the photon-transport ray-tracer (`grid::WalkPhotonPackage`)
+> needs units, HEALPix directions, the species + 7 rate fields, and inter-grid
+> transport — a subsystem now buildable on this fixture; and the
+> multi-dimensional (y/z) hydro sweeps.
 
 ## The per-kernel workflow
 
