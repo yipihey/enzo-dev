@@ -1,0 +1,43 @@
+# Time     = 0.000000
+# Redshift = 0.000000
+#
+# Column 1.  Center of mass (x)
+# Column 2.  Center of mass (y)
+# Column 3.  Center of mass (z)
+# Column 4.  Subhalo number
+# Column 5.  Parent halo number
+# Column 6.  First particle in halo particle list
+#            --> All subgroup particles are consecutively listed in
+#                particle list (if written)
+# Column 7.  Number of particles
+# Column 8.  Halo mass [solar masses]
+# Column 9.  Stellar mass [solar masses]
+# Column 10. Mean x-velocity [km/s]
+# Column 11. Mean y-velocity [km/s]
+# Column 12. Mean z-velocity [km/s]
+# Column 13. Velocity dispersion [km/s]
+# Column 14. Mean x-angular momentum [Mpc * km/s]
+# Column 15. Mean y-angular momentum [Mpc * km/s]
+# Column 16. Mean z-angular momentum [Mpc * km/s]
+# Column 17. Spin parameter
+#
+# datavar lines are for partiview.  Ignore them if you're not partiview.
+#
+datavar 1 subhalo_number
+datavar 2 parent_number
+datavar 3 particle_offset
+datavar 4 number_of_particles
+datavar 5 halo_mass
+datavar 6 stellar_mass
+datavar 7 x_velocity
+datavar 8 y_velocity
+datavar 9 z_velocity
+datavar 10 velocity_dispersion
+datavar 11 x_angular_momentum
+datavar 12 y_angular_momentum
+datavar 13 z_angular_momentum
+datavar 14 spin
+
+0.50000004458932 0.50013653978688 0.50657247181769            0            0            0         1107 3.068481034136e-48            0            0            0            0            0            0            0            0            0
+0.50043619586708 0.49978703798638 0.49284713791822            1            0         1107          273 3.068481034136e-48            0            0            0            0            0            0            0            0            0
+0.49945308498336 0.50064385488233 0.51104227598655            2            0         1380           39 3.068481034136e-48            0            0            0            0            0            0            0            0            0

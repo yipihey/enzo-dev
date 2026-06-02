@@ -1,0 +1,85 @@
+{
+  "grids": [
+    {
+      "dims": [
+        406,
+        406,
+        1
+      ],
+      "fields": [
+        {
+          "dims": [
+            406,
+            406,
+            1
+          ],
+          "name": "Density",
+          "stats": {
+            "count": 164836,
+            "max": 1.0,
+            "mean": 0.884618651266,
+            "min": 0.125,
+            "sum": 145817.0
+          },
+          "type": 0
+        },
+        {
+          "dims": [
+            406,
+            406,
+            1
+          ],
+          "name": "TotalEnergy",
+          "stats": {
+            "count": 164836,
+            "max": 2.8,
+            "mean": 2.53955931957,
+            "min": 2.5,
+            "sum": 418610.8
+          },
+          "type": 1
+        },
+        {
+          "dims": [
+            406,
+            406,
+            1
+          ],
+          "name": "Velocity1",
+          "stats": {
+            "count": 164836,
+            "max": 0.0,
+            "mean": 0.0,
+            "min": 0.0,
+            "sum": 0.0
+          },
+          "type": 4
+        },
+        {
+          "dims": [
+            406,
+            406,
+            1
+          ],
+          "name": "Velocity2",
+          "stats": {
+            "count": 164836,
+            "max": 0.0,
+            "mean": 0.0,
+            "min": 0.0,
+            "sum": 0.0
+          },
+          "type": 5
+        }
+      ],
+      "index": 0,
+      "num_particles": 0,
+      "rank": 2
+    }
+  ],
+  "name": "Implosion",
+  "num_grids": 1,
+  "paramfile": "run/Hydro/Hydro-2D/Implosion/Implosion.enzo",
+  "problem_type": 6,
+  "schema": 1
+}

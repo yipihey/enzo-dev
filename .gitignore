@@ -60,3 +60,18 @@ run/results.js
 Make.mach.claire-linux
 *__test_standard.py
 run/test_output/
+# EnzoModules build artifacts (shared libraries are built locally / in CI)
+EnzoModules/deps/*.so
+EnzoModules/deps/*.o
+src/enzo/libenzo_*.so
+EnzoModules/**/__pycache__/
+EnzoModules/.pytest_cache/
+EnzoModules/**/*.pyc
+EnzoModules/*.egg-info/
+
+# Enzo rate-table dumps written by InitializeRateData during chemistry tests
+EnzoModules/*.out
+EnzoModules/RT_spectrum_table.dat
+
+# Agent worktrees
+.claude/worktrees/

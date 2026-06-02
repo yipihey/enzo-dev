@@ -1,0 +1,69 @@
+{
+  "grids": [
+    {
+      "dims": [
+        106,
+        1,
+        1
+      ],
+      "fields": [
+        {
+          "dims": [
+            106,
+            1,
+            1
+          ],
+          "name": "Density",
+          "stats": {
+            "count": 106,
+            "max": 1.0,
+            "mean": 0.397405660377,
+            "min": 0.125,
+            "sum": 42.125
+          },
+          "type": 0
+        },
+        {
+          "dims": [
+            106,
+            1,
+            1
+          ],
+          "name": "Velocity1",
+          "stats": {
+            "count": 106,
+            "max": 0.75,
+            "mean": 0.233490566038,
+            "min": 0.0,
+            "sum": 24.75
+          },
+          "type": 4
+        },
+        {
+          "dims": [
+            106,
+            1,
+            1
+          ],
+          "name": "TotalEnergy",
+          "stats": {
+            "count": 106,
+            "max": 2.78125,
+            "mean": 2.24321933962,
+            "min": 2.0,
+            "sum": 237.78125
+          },
+          "type": 1
+        }
+      ],
+      "index": 0,
+      "num_particles": 0,
+      "rank": 1
+    }
+  ],
+  "name": "Toro-1-ShockTube",
+  "num_grids": 1,
+  "paramfile": "run/Hydro/Hydro-1D/Toro-1-ShockTube/Toro-1-ShockTube.enzo",
+  "problem_type": 1,
+  "schema": 1
+}
