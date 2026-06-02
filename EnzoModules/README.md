@@ -414,6 +414,31 @@ the timestep must be finer than that lifetime to catch it — with the default
 light-crossing dt the star is born and supernovae within one step.  In a Python
 driver: `run_amr(radiation=True, star_sources=True, star_formation=True)`.
 
+#### More physics methods & modules
+
+Rounding out the audit's P1/P2 items, the session also exposes:
+
+- **All hydro/MHD methods** — `solve_hydro` dispatches the Runge-Kutta family
+  (HD_RK / MHD_RK: two-step integration with Dedner wave speeds and `NColor`
+  setup) in addition to PPM/Zeus.  `tests/test_session.py` runs the Brio-Wu MHD
+  shock tube (MHD_RK) step-by-step, finite and mass-conserving.  (Constrained-
+  transport MHD dispatches but needs extra field orchestration — see
+  `docs/COVERAGE_AUDIT.md`.)
+- **Active particles** — `active_particles(level)` (the sink / SmartStar /
+  accretion framework: ActiveParticleInitialize → Handler → Finalize).
+- **Cosmology** — `cosmology()` / `scale_factor` / `redshift`
+  (CosmologyComputeExpansionFactor).
+- **UV background** — `update_radiation_field(level)` (RadiationFieldUpdate).
+- **Turbulence driving** — `random_forcing(level)`
+  (ComputeRandomForcingNormalization + ComputeStochasticForcing).
+- **Thermal conduction** (`conduct_heat`) and **shock finding** (`find_shocks`).
+- **Diagnostics & hooks** — `domain_boundary_mass_flux(level)` and
+  `problem_specific_routines(level)`.
+
+Each is a clean no-op when its physics is off, so they compose freely into the
+Python `evolve_level` / `run_amr` driver.  `docs/COVERAGE_AUDIT.md` tracks what
+remains explicitly deferred (implicit FLD, CT-MHD orchestration, libyt).
+
 - **Multi-grid (AMR) photon transport** (`bridge.raytrace_twogrid`) — a ray
   crossing two tiled grids (the legacy `SubgridMarker` -> `FindPhotonNewGrid`
   handoff) attenuates exactly as one grid of the combined length

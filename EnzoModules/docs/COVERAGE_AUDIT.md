@@ -70,25 +70,29 @@ step, 🟡 partial / kernel-level only, or ❌ missing.
 
 | Gap | Enzo entry point | Notes | Suggested API |
 |-----|------------------|-------|---------------|
-| **Full hydro/MHD methods on the live hierarchy** | `Grid::*` RK solvers (`HD_RK`, `MHD_RK`), CT-MHD (`MHD_Li`), `ComputeDednerWaveSpeeds` | `solve_hydro` covers PPM/Zeus; the RK + CT-MHD live-hierarchy solves exist only as kernel line-solvers. | extend `solve_hydro` to dispatch all `HydroMethod`s |
-| **Active particles** | `ActiveParticleInitialize` / `ActiveParticleFinalize` | Modern sink / SmartStar / accretion framework (`EvolveLevel` calls these alongside the star-particle path). | `session.active_particles(level)` |
-| **Cosmology expansion** | `CosmologyComputeExpansionFactor`, comoving source terms | Implicit inside the solvers; no explicit expansion step / scale-factor accessor for a Python loop. | `session.cosmology_a()`, expansion in `advance_time` |
-| **FLD radiation + UV background** | `RadiativeTransferCallFLD`, `RadiationFieldUpdate` | `evolve_photons` is the ray-tracing (Moray) RT only; implicit FLD and the homogeneous UV background are separate. | `session.solve_fld(level)`, `session.update_radiation_field()` |
+| ✅ ~~**Full hydro/MHD methods**~~ **— RK done; CT partial** | `Grid::*` RK solvers (`HD_RK`, `MHD_RK`), CT-MHD (`MHD_Li`), `ComputeDednerWaveSpeeds` | `solve_hydro` now dispatches the RK two-step path (HD_RK/MHD_RK, with Dedner wave speeds + `SetNumberOfColours`).  PPM/Zeus unchanged.  **CT-MHD (MHD_Li)** dispatches but its B-field update corrupts memory in the minimal session — needs CT field orchestration (follow-up). | ✅ `session.solve_hydro(level)` (all methods) |
+| ✅ ~~**Active particles**~~ **— DONE** | `ActiveParticleInitialize` / `ActiveParticleFinalize` | Modern sink / SmartStar / accretion framework. | ✅ `session.active_particles(level)` |
+| ✅ ~~**Cosmology expansion**~~ **— DONE** | `CosmologyComputeExpansionFactor`, comoving source terms | Comoving source terms already live inside the solvers; added a scale-factor / redshift accessor for the Python loop. | ✅ `session.cosmology()`, `session.scale_factor`, `session.redshift` |
+| 🟡 **FLD radiation + UV background** | `RadiativeTransferCallFLD`, `RadiationFieldUpdate` | ✅ **UV background done** (`update_radiation_field`).  Implicit **FLD** needs an `ImplicitProblemABC` solver instance (gFLDProblem/FSProb) — substantial, and the Moray photon-package RT is the primary path (fully covered).  Deferred. | ✅ `session.update_radiation_field(level)`; FLD: deferred |
 
 ### P2 — specialized physics & infrastructure
 
-- ❌ **Stochastic forcing / turbulence driving** — `ComputeStochasticForcing`,
-  `ComputeRandomForcingNormalization`.
-- ❌ **Thermal conduction**, **cosmic rays**, **shock finding**, **MHD div-B
-  cleaning** as explicit steps.
-- ❌ **Conservation / diagnostics** — `CheckEnergyConservation`,
-  `ComputeDomainBoundaryMassFlux`.
-- ❌ **Problem-specific hooks** — `CallProblemSpecificRoutines`, event hooks.
-- ❌ **Inline analysis** — `CallPython` / libyt streaming (halo finding is now
-  done via `find_halos`).
-- 🟡 **Gravity completeness** — `gravity` runs the chain; potential/acceleration
-  boundary (`SetAccelerationBoundary`), external/static gravity and the APM
-  subgrid solver should be checked for full multi-level coverage.
+- ✅ **Stochastic forcing / turbulence driving** — `session.random_forcing(level)`
+  (`ComputeRandomForcingNormalization` + `ComputeStochasticForcing`).
+- ✅ **Thermal conduction** (`session.conduct_heat`) and **shock finding**
+  (`session.find_shocks`).  Cosmic rays / MHD div-B cleaning remain as future
+  per-step modules.
+- ✅ **Conservation / diagnostics** — `session.domain_boundary_mass_flux(level)`
+  (`ComputeDomainBoundaryMassFlux`).  `CheckEnergyConservation` is dead/commented
+  in `EvolveLevel` (gated on `ComputePotential`), so skipped.
+- ✅ **Problem-specific hooks** — `session.problem_specific_routines(level)`
+  (`CallProblemSpecificRoutines`).
+- ❌ **Inline analysis** — `CallPython` / libyt streaming (the analysis need is
+  covered by `find_halos` + the field/particle getters).
+- ✅ **Gravity completeness** — `gravity` already runs the full chain *including*
+  external/static gravity (`ComputeAccelerationFieldExternal`).  The AMR
+  acceleration-boundary consistency pass (`SetAccelerationBoundary`, SAB) and the
+  APM subgrid solver remain optional refinements.
 
 ---
 
@@ -102,11 +106,13 @@ test that pins the bridge against the legacy reference. Current state:
   cooling/chemistry, checkpoint/restart** — behavioural tests (`solve_cooling`
   monotonic-cooling + chemistry; bitwise checkpoint/restart; graceful
   init/restart-failure).
-- 🟡 **Zeus, RK hydro/MHD, CT-MHD** — kernel tests only; no live-hierarchy
-  `solve_hydro` certification.
+- ✅ **RK MHD on the live hierarchy** — Brio-Wu run step-by-step, finite + mass
+  conserved.  Zeus / CT-MHD still kernel-tested only at the session level.
 - ✅ **Star formation / feedback / activation** — end-to-end test: a Pop III star
   activates and drives a propagating Strömgren I-front.
-- ❌ **Cosmology** — untested at the Session level (unexposed).
+- ✅ **Cosmology accessor** — scale factor / redshift on a comoving run.
+- ✅ **Optional per-step modules** — active particles, UV background, forcing,
+  conduction, shock finding, diagnostics, problem hooks: no-op robustness tests.
 
 ---
 
@@ -118,14 +124,30 @@ test that pins the bridge against the legacy reference. Current state:
    restart, and dumps can be diffed against on-disk Enzo output.
 3. ✅ **`star_particles`** (P0) — **done**; completes the star lifecycle so
    `evolve_photons(stars=True)` actually radiates (Pop III activates → I-front).
-4. **Extend `solve_hydro` to all `HydroMethod`s** (P1) — turns the kernel-level
-   RK/CT-MHD work into live-hierarchy steps, with certification.  *(next)*
-5. **`active_particles`, FLD/UV background, cosmology accessors** (P1).
-6. **P2 specialized physics** as needed by target science problems.
+4. ✅ **`solve_hydro` for all `HydroMethod`s** (P1) — **done** for the RK family
+   (HD_RK/MHD_RK); CT-MHD dispatches but needs CT field orchestration (follow-up).
+5. ✅ **`active_particles`, UV background, cosmology accessors** (P1) — **done**;
+   implicit FLD deferred (needs an `ImplicitProblemABC` instance).
+6. ✅ **P2 specialized physics** — **done**: forcing, conduction, shock finding,
+   domain-boundary-mass-flux diagnostic, problem-specific hooks.
 
-**All P0 gaps are now closed.**  A Python driver can run a *cooling,
+**All P0 gaps are closed, and the P1/P2 audit items are implemented** (bar the
+explicitly-deferred few: implicit FLD, CT-MHD memory orchestration, libyt
+streaming, SAB/APM gravity refinements).  A Python driver can run a *cooling,
 star-forming, radiating* (radiation-hydro + gravity + AMR) simulation end to end
 — `run_amr(gravity=True, cooling=True, radiation=True, star_sources=True,
-star_formation=True)` — checkpoint it, and reload it, every step built from a
-certified legacy call.  The remaining work (P1/P2) broadens method coverage and
-certification rather than filling a hole in a complete physics step.
+star_formation=True)` — checkpoint it, reload it, run the RK-MHD solver, query
+cosmology, and invoke the optional physics modules (active particles, UV
+background, turbulence forcing, conduction, shocks, diagnostics), every step
+built from a certified legacy call.
+
+### Explicitly deferred (large or niche)
+- **Implicit FLD radiation** (`RadiativeTransferCallFLD`) — needs a constructed
+  `gFLDProblem`/`FSProb` solver; Moray photon-package RT is the primary path and
+  is fully covered.
+- **Constrained-transport MHD** (`MHD_Li`) session step — the B-field update
+  corrupts memory without extra CT field/electric-field orchestration.
+- **libyt / `CallPython` inline streaming** — `find_halos` + getters cover the
+  in-memory analysis need.
+- **`SetAccelerationBoundary` (SAB) / APM subgrid gravity** — multi-level gravity
+  refinements beyond the working base chain.

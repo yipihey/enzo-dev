@@ -121,6 +121,11 @@ int ComputeRandomForcingNormalization(LevelHierarchyEntry *LevelArray[],
                                       float *norm, float *pTopGridTimeStep);
 int ComputeStochasticForcing(TopGridData *MetaData, HierarchyEntry *Grids[],
                              int NumberOfGrids);
+int ComputeDomainBoundaryMassFlux(HierarchyEntry *Grids[], int level,
+                                  int NumberOfGrids, TopGridData *MetaData);
+int CallProblemSpecificRoutines(TopGridData *MetaData, HierarchyEntry *ThisGrid,
+                                int GridNum, float *norm, float TopGridTimeStep,
+                                int level, int LevelCycleCount[]);
 int EvolveHierarchy(HierarchyEntry &TopGrid, TopGridData &MetaData,
                     ExternalBoundary *Exterior,
 #ifdef TRANSFER
@@ -890,6 +895,38 @@ int enzomodules_session_cosmology(void *h, double *a_out, double *z_out)
    * 1+z = (1+InitialRedshift)/a. */
   if (z_out) *z_out = (double)((1.0 + InitialRedshift) / a - 1.0);
   return 0;
+}
+
+/* Track the mass flux through the domain boundary on `level`
+ * (ComputeDomainBoundaryMassFlux) -- a conservation diagnostic, accumulated into
+ * MetaData's boundary-mass-flux container. */
+int enzomodules_session_domain_boundary_mass_flux(void *h, int level)
+{
+  EMProblem *p = (EMProblem *)h;
+  HierarchyEntry **Grids;
+  int n = GenerateGridArray(p->LevelArray, level, &Grids);
+  int rc = (ComputeDomainBoundaryMassFlux(Grids, level, n, &p->MetaData) == FAIL)
+           ? 1 : 0;
+  delete[] Grids;
+  return rc;
+}
+
+/* Run the problem-specific per-step routines (CallProblemSpecificRoutines) --
+ * the ProblemType-dispatched hook EvolveLevel calls each grid step (e.g. the
+ * SphericalInfall central reset).  No-op for problem types without one. */
+int enzomodules_session_problem_specific_routines(void *h, int level)
+{
+  EMProblem *p = (EMProblem *)h;
+  HierarchyEntry **Grids;
+  int n = GenerateGridArray(p->LevelArray, level, &Grids);
+  float norm = 0.0;
+  float topdt = (n > 0) ? Grids[0]->GridData->ReturnTimeStep() : 0.0;
+  int rc = 0;
+  for (int i = 0; i < n; i++)
+    if (CallProblemSpecificRoutines(&p->MetaData, Grids[i], i, &norm, topdt,
+                                    level, LevelCycleCount) == FAIL) rc = 1;
+  delete[] Grids;
+  return rc;
 }
 
 /* Allocate the per-level boundary-flux storage (one entry per subgrid) that

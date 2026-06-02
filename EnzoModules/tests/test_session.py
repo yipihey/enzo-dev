@@ -215,6 +215,8 @@ def test_session_physics_steps_noop():
             s.random_forcing(0)
             s.conduct_heat(0)
             s.find_shocks(0)
+            s.domain_boundary_mass_flux(0)
+            s.problem_specific_routines(0)
         assert list(s.grid(0).field("Density")) == rho0
 
 

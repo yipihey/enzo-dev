@@ -104,7 +104,9 @@ def _lib():
         for fn in ("set_boundary", "solve_hydro", "solve_cooling",
                    "star_particles", "active_particles",
                    "update_radiation_field", "random_forcing", "conduct_heat",
-                   "find_shocks", "rebuild", "gravity", "evolve_photons",
+                   "find_shocks", "domain_boundary_mass_flux",
+                   "problem_specific_routines", "rebuild", "gravity",
+                   "evolve_photons",
                    "create_fluxes", "update_from_finer", "finalize_fluxes",
                    "num_grids_on_level"):
             f = getattr(lib, "enzomodules_session_" + fn)
@@ -406,6 +408,18 @@ class Session:
         ShockMethod is on."""
         if self._lib.enzomodules_session_find_shocks(self._h, level):
             raise RuntimeError(f"shock finding failed (level {level})")
+
+    def domain_boundary_mass_flux(self, level: int = 0) -> None:
+        """Track the mass flux through the domain boundary
+        (ComputeDomainBoundaryMassFlux) -- a conservation diagnostic."""
+        if self._lib.enzomodules_session_domain_boundary_mass_flux(self._h, level):
+            raise RuntimeError(f"domain boundary mass flux failed (level {level})")
+
+    def problem_specific_routines(self, level: int = 0) -> None:
+        """Run the ProblemType-dispatched per-step hook
+        (CallProblemSpecificRoutines).  No-op for problem types without one."""
+        if self._lib.enzomodules_session_problem_specific_routines(self._h, level):
+            raise RuntimeError(f"problem-specific routines failed (level {level})")
 
     def cosmology(self) -> tuple:
         """Return ``(scale_factor, redshift)`` at the current time
