@@ -34,6 +34,9 @@ step, 🟡 partial / kernel-level only, or ❌ missing.
 - ✅ **Radiative cooling + non-equilibrium chemistry** — `solve_cooling`
   (`grid::MultiSpeciesHandler`: Grackle / coupled rate-and-cool / rate +
   cooling). *(was P0 gap #1; done)*
+- ✅ **Data output + checkpoint/restart** — `write_output` (`Group_WriteAllData`)
+  / `from_output` (`Group_ReadAllData`); bitwise restart certified.
+  *(was P0 gap #2; done)*
 - ✅ **Drivers** — `evolve_level` (recursive Python EvolveLevel), `run_amr`,
   `step`, `run`.
 - ✅ **Inspection** — field + particle getters per grid.
@@ -57,7 +60,7 @@ step, 🟡 partial / kernel-level only, or ❌ missing.
 |-----|------------------|----------------|---------------|
 | ✅ ~~**Radiative cooling + non-equilibrium chemistry**~~ **— DONE** | `Grid::MultiSpeciesHandler` / `SolveRadiativeCooling` / `GrackleWrapper`, called from `EvolveLevel.C:671` — a **separate** step, *not* inside `solve_hydro` | The Session can do adiabatic + RT hydro but **cannot cool or evolve species** standalone. This was the single biggest missing physics step. | ✅ `session.solve_cooling(level)` (+ `cooling=True` in `evolve_level`/`run_amr`) |
 | **Star formation + feedback** | `StarParticleInitialize` → star makers (`STARMAKE_METHOD`) → `Grid::StarParticleHandler` (feedback) → `StarParticleFinalize` / `ActivateNewStar` | Only `StarParticleInitialize` is reached today (inside `evolve_photons(stars=True)`). The full lifecycle — formation, feedback deposition, activation — is unexposed; this is why a Pop III star never *activates* to radiate. | `session.star_particles(level)` (init + handler + finalize) |
-| **Data output / checkpoint + restart** | `WriteAllData`, `Group_WriteAllData`; `ReadAllData` | The Session cannot persist or reload state — no checkpoints, no handoff to yt on disk, no resume. | `session.write_output(name)`, `Session.from_output(dir)` |
+| ✅ ~~**Data output / checkpoint + restart**~~ **— DONE** | `Group_WriteAllData` / `Group_ReadAllData` | The Session could not persist or reload state. Now it can; bitwise restart is certified. | ✅ `session.write_output(number)`, `Session.from_output(path)` |
 
 ### P1 — broaden physics coverage
 
@@ -92,12 +95,12 @@ test that pins the bridge against the legacy reference. Current state:
 
 - ✅ **PPM** — bitwise vs `EvolveHierarchy`; exact-Riemann L1.
 - ✅ **AMR integrator, gravity chain, RT (PhotonTest I-front), halo finder,
-  cooling/chemistry** — behavioural tests (`solve_cooling` monotonic-cooling +
-  chemistry test; graceful init-failure test).
+  cooling/chemistry, checkpoint/restart** — behavioural tests (`solve_cooling`
+  monotonic-cooling + chemistry; bitwise checkpoint/restart; graceful
+  init/restart-failure).
 - 🟡 **Zeus, RK hydro/MHD, CT-MHD** — kernel tests only; no live-hierarchy
   `solve_hydro` certification.
-- ❌ **Star formation, cosmology, output/restart** — untested at the Session
-  level (mostly because unexposed).
+- ❌ **Star formation, cosmology** — untested at the Session level (unexposed).
 
 ---
 
@@ -105,8 +108,8 @@ test that pins the bridge against the legacy reference. Current state:
 
 1. ✅ **`solve_cooling`** (P0) — **done**; unlocks realistic ISM/cosmology runs,
    pairs with the existing `chemistry_step` kernel and RT coupling.
-2. **`write_output` + `from_output`** (P0) — checkpoint/restart; also lets tests
-   diff against on-disk Enzo dumps for stronger certification.
+2. ✅ **`write_output` + `from_output`** (P0) — **done**; bitwise checkpoint/
+   restart, and dumps can be diffed against on-disk Enzo output.
 3. **`star_particles`** (P0) — completes the star lifecycle and makes
    `evolve_photons(stars=True)` actually radiate.
 4. **Extend `solve_hydro` to all `HydroMethod`s** (P1) — turns the kernel-level

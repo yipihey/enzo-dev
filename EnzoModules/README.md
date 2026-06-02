@@ -377,6 +377,25 @@ hardened `session_init`: a problem whose initialization throws (e.g. a missing
 cooling-rate data file) now raises a Python error instead of aborting the host
 process.
 
+#### Data output + checkpoint/restart
+
+`Session.write_output(number)` writes the full state to disk
+(`Group_WriteAllData`) — the same HDF5 dump Enzo produces: grid data, the
+hierarchy, the external boundary and a parameter file — and returns the dump's
+path.  `Session.from_output(path)` reloads it (`Group_ReadAllData`) into a fresh
+session.  Together they are a true **checkpoint/restart**: `tests/test_session.py`
+shows that running N steps, checkpointing, reloading and continuing M steps
+reproduces an uninterrupted N+M-step run **bit-for-bit**, and that a multi-grid
+AMR hierarchy round-trips (grid count + state preserved).
+
+This was P0 gap #2.  It also closes a certification loop: dumps can now be diffed
+against on-disk Enzo output.  Two robustness points fell out of the wiring:
+Enzo's output-name buffer is only initialized when the basename matches a
+recognized dump-name pattern (otherwise the name is built from uninitialized
+stack memory), so the bridge passes the run's `DataDumpName` and writes directly
+to the session's working directory with a deterministic `<DataDumpName><id>`
+name; and `from_output` raises a Python error on a bad dump instead of aborting.
+
 - **Multi-grid (AMR) photon transport** (`bridge.raytrace_twogrid`) — a ray
   crossing two tiled grids (the legacy `SubgridMarker` -> `FindPhotonNewGrid`
   handoff) attenuates exactly as one grid of the combined length

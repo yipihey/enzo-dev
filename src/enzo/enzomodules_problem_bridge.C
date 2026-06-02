@@ -38,6 +38,17 @@ extern "C" void enzomodules_init_timer();
 int CommunicationInitialize(Eint32 *argc, char **argv[]);
 int InitializeNew(char *filename, HierarchyEntry &TopGrid, TopGridData &MetaData,
                   ExternalBoundary &Exterior, float *Initialdt);
+class ImplicitProblemABC;
+int Group_WriteAllData(char *basename, int filenumber, HierarchyEntry *TopGrid,
+                       TopGridData &MetaData, ExternalBoundary *Exterior,
+#ifdef TRANSFER
+                       ImplicitProblemABC *ImplicitSolver,
+#endif
+                       FLOAT WriteTime, int CheckpointDump);
+int Group_ReadAllData(char *name, HierarchyEntry *TopGrid, TopGridData &MetaData,
+                      ExternalBoundary *Exterior, FLOAT *Initialdt,
+                      bool ReadParticlesOnly);
+int SetDefaultGlobalValues(TopGridData &MetaData);
 void AddLevel(LevelHierarchyEntry *Array[], HierarchyEntry *Grid, int level);
 int GenerateGridArray(LevelHierarchyEntry *LevelArray[], int level,
                       HierarchyEntry **Grids[]);
@@ -252,9 +263,8 @@ extern "C" TopGridData *EnzoModulesProblemMetaData(void *h)
 { return &((EMProblem *)h)->MetaData; }
 
 
-/* Initialize a problem and build its LevelArray for stepping.  Returns a
- * handle, or NULL on failure. */
-void *enzomodules_session_init(const char *paramfile)
+/* One-time MPI/comm + timer init, shared by session_init and from_output. */
+static void em_ensure_comm()
 {
   static bool comm_done = false;
   if (!comm_done) {
@@ -266,7 +276,11 @@ void *enzomodules_session_init(const char *paramfile)
     comm_done = true;
   }
   enzomodules_init_timer();
+}
 
+/* Allocate an EMProblem with its hierarchy/level state zeroed. */
+static EMProblem *em_new_problem()
+{
   EMProblem *p = new EMProblem();
   p->TopGrid.NextGridThisLevel = NULL;
   p->TopGrid.NextGridNextLevel = NULL;
@@ -278,6 +292,16 @@ void *enzomodules_session_init(const char *paramfile)
     p->NumberOfSubgrids[l] = NULL;
     p->SubgridFluxesEstimate[l] = NULL;
   }
+  return p;
+}
+
+/* Initialize a problem and build its LevelArray for stepping.  Returns a
+ * handle, or NULL on failure. */
+void *enzomodules_session_init(const char *paramfile)
+{
+  em_ensure_comm();
+
+  EMProblem *p = em_new_problem();
 
   /* Hardening: several radiative-transfer globals are reset only by
    * RadiativeTransferReadParameters (the RT-on path), not by
@@ -313,6 +337,97 @@ void *enzomodules_session_init(const char *paramfile)
   /* Radiative transfer needs its own init (done in enzo.C, not InitializeNew):
    * it allocates the kph/PhotoGamma fields, sets dtPhoton, and builds the
    * radiation source list.  Skipped cleanly when RadiativeTransfer is off. */
+  if (RadiativeTransfer) {
+    ImplicitProblemABC *ImplicitSolver = NULL;
+    RadiativeTransferInitialize(fname, p->TopGrid, p->MetaData, p->Exterior,
+                                ImplicitSolver, p->LevelArray);
+  }
+#endif
+  free(fname);
+
+  collect_grids(&p->TopGrid, p->grids);
+  return (void *)p;
+}
+
+/* Write the full simulation state to disk (Group_WriteAllData) -- the same HDF5
+ * data dump / checkpoint enzo.C writes, with grid data, the hierarchy, the
+ * external boundary and a parameter file.  `basename` + zero-padded `filenumber`
+ * name the dump (e.g. basename="snap", filenumber=0 -> "snap0000").  Set
+ * checkpoint != 0 for a checkpoint dump (flags CheckpointRestart in the output).
+ * Returns 0 on success, 1 on failure.  The resulting dump can be reloaded with
+ * enzomodules_session_from_output. */
+int enzomodules_session_write_output(void *h, int filenumber, int checkpoint)
+{
+  EMProblem *p = (EMProblem *)h;
+  /* Group_WriteAllData builds its output name as <name-buffer> + <id(filenumber)>,
+   * but only initializes the name buffer when the basename matches one of the
+   * recognized dump-name patterns -- otherwise it is uninitialized stack memory
+   * (garbage prefix).  Pass the session's own DataDumpName so the DataDumpName
+   * branch fires, and NULL the dump directories so the dump lands directly in
+   * the working directory (no subdir) with the deterministic name
+   * "<DataDumpName><id>".  Restore the fields afterwards. */
+  const char *base = (p->MetaData.DataDumpName && p->MetaData.DataDumpName[0])
+                   ? p->MetaData.DataDumpName : "data";
+  char *name = strdup(base);
+  char *saved_ddir = p->MetaData.DataDumpDir;
+  char *saved_gdir = p->MetaData.GlobalDir;
+  char *saved_ldir = p->MetaData.LocalDir;
+  p->MetaData.DataDumpDir = NULL;
+  p->MetaData.GlobalDir   = NULL;
+  p->MetaData.LocalDir    = NULL;
+  int rc;
+  try {
+    rc = Group_WriteAllData(name, filenumber, &p->TopGrid, p->MetaData,
+                            &p->Exterior,
+#ifdef TRANSFER
+                            NULL,   /* ImplicitSolver: FLD only, unused for Moray RT */
+#endif
+                            -1, checkpoint ? TRUE : FALSE);
+  } catch (EnzoFatalException &e) {
+    rc = FAIL;
+  }
+  p->MetaData.DataDumpDir = saved_ddir;
+  p->MetaData.GlobalDir   = saved_gdir;
+  p->MetaData.LocalDir    = saved_ldir;
+  free(name);
+  return (rc == FAIL) ? 1 : 0;
+}
+
+/* Reload a simulation from a dump written by enzomodules_session_write_output
+ * (or by Enzo itself): Group_ReadAllData reads the parameter file, external
+ * boundary, hierarchy and grid data, then we build the LevelArray (all levels)
+ * exactly as session_init does.  `name` is the dump's hierarchy/parameter file
+ * (e.g. "snap0000").  Returns a session handle, or NULL on failure. */
+void *enzomodules_session_from_output(const char *name)
+{
+  em_ensure_comm();
+
+  EMProblem *p = em_new_problem();
+
+  /* Reset globals first (Group_ReadAllData's ReadParameterFile only sets what
+   * the dump lists), then clear the RT global that leaks into non-RT runs. */
+  SetDefaultGlobalValues(p->MetaData);
+#ifdef TRANSFER
+  RadiationPressure = FALSE;
+#endif
+  UnigridTranspose = 0;
+
+  char *fname = strdup(name);
+  FLOAT initdt = 0.0;
+  int rc;
+  try {
+    rc = Group_ReadAllData(fname, &p->TopGrid, p->MetaData, &p->Exterior,
+                           &initdt, false);
+  } catch (EnzoFatalException &e) {
+    rc = FAIL;
+  }
+  if (rc == FAIL) { free(fname); delete p; return NULL; }
+  p->dt = (float)initdt;
+
+  p->MetaData.dtDataDump = 0.0;
+  AddLevel(p->LevelArray, &p->TopGrid, 0);
+
+#ifdef TRANSFER
   if (RadiativeTransfer) {
     ImplicitProblemABC *ImplicitSolver = NULL;
     RadiativeTransferInitialize(fname, p->TopGrid, p->MetaData, p->Exterior,

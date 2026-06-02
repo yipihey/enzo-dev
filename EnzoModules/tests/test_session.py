@@ -38,6 +38,76 @@ def _toro1():
     return p
 
 
+def _interior(g, field):
+    """Field values with the 3-zone ghost boundary stripped (1D helper)."""
+    ng, n = 3, g.dims[0]
+    return list(g.field(field))[ng:n - ng]
+
+
+def test_session_checkpoint_restart_bitwise(tmp_path):
+    """write_output -> from_output is a true checkpoint/restart: running N steps,
+    checkpointing, reloading and continuing M steps reproduces an uninterrupted
+    N+M-step run *bit-for-bit* (the gold-standard restart guarantee)."""
+    import enzomodules.problems as P
+    # uninterrupted reference: 6 steps
+    with problems.Session(_toro1()) as ref:
+        with P._suppress_fd_output():
+            for _ in range(6):
+                ref.step(0)
+        rho_ref = _interior(ref.grid(0), "Density")
+        te_ref = _interior(ref.grid(0), "TotalEnergy")
+        t_ref, cyc_ref = ref.time, ref.cycle
+    # 3 steps -> checkpoint (to a persistent dir) -> reload -> 3 more steps
+    with problems.Session(_toro1(), workdir=str(tmp_path)) as s:
+        with P._suppress_fd_output():
+            for _ in range(3):
+                s.step(0)
+        path = s.write_output(number=0)
+    s2 = problems.Session.from_output(path)
+    try:
+        with P._suppress_fd_output():
+            for _ in range(3):
+                s2.step(0)
+        assert s2.cycle == cyc_ref
+        assert abs(s2.time - t_ref) <= 1e-12 * max(1.0, abs(t_ref))
+        assert _interior(s2.grid(0), "Density") == rho_ref      # bitwise
+        assert _interior(s2.grid(0), "TotalEnergy") == te_ref
+    finally:
+        s2.close()
+
+
+def test_session_write_output_multigrid(tmp_path):
+    """write_output / from_output preserve a multi-grid AMR hierarchy: the grid
+    count and the root-grid interior state round-trip exactly."""
+    path = _param("Hydro/Hydro-2D/ImplosionAMR/ImplosionAMR.enzo")
+    if not os.path.exists(path):
+        pytest.skip("ImplosionAMR parameter file missing")
+    import enzomodules.problems as P
+    with problems.Session(path, workdir=str(tmp_path)) as s:
+        s.run_amr(max_cycles=3)              # run_amr self-suppresses output
+        with P._suppress_fd_output():
+            s.set_boundary(0)                # consistent ghost zones for compare
+        ngrids = s.num_grids
+        rho = list(s.grid(0).field("Density"))
+        dump = s.write_output(number=0)
+    s2 = problems.Session.from_output(dump)
+    try:
+        assert s2.num_grids == ngrids                # hierarchy preserved
+        with P._suppress_fd_output():
+            s2.set_boundary(0)
+        assert list(s2.grid(0).field("Density")) == rho   # bitwise roundtrip
+    finally:
+        s2.close()
+
+
+def test_session_from_output_failure_is_graceful():
+    """Hardening: from_output on a nonexistent dump raises instead of aborting."""
+    import tempfile
+    with pytest.raises(RuntimeError):
+        problems.Session.from_output(
+            os.path.join(tempfile.gettempdir(), "enzomodules_no_such_dump0000"))
+
+
 def test_session_matches_exact_riemann():
     """A Python-driven timestep loop on the Toro-1 shock tube reproduces the
     exact Riemann solution (same L1 as EvolveHierarchy)."""

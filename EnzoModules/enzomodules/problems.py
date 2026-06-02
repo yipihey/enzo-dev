@@ -82,6 +82,12 @@ def _lib():
         # Persistent-session stepping API.
         lib.enzomodules_session_init.restype = ctypes.c_void_p
         lib.enzomodules_session_init.argtypes = [ctypes.c_char_p]
+        # Data output / restart.
+        lib.enzomodules_session_write_output.restype = ctypes.c_int
+        lib.enzomodules_session_write_output.argtypes = [
+            ctypes.c_void_p, ctypes.c_int, ctypes.c_int]
+        lib.enzomodules_session_from_output.restype = ctypes.c_void_p
+        lib.enzomodules_session_from_output.argtypes = [ctypes.c_char_p]
         for fn in ("time", "stop_time", "compute_dt"):
             f = getattr(lib, "enzomodules_session_" + fn)
             f.restype = ctypes.c_double
@@ -281,6 +287,7 @@ class Session:
         if workdir is None:
             self._tmp = tempfile.TemporaryDirectory(prefix="enzomodules_sess_")
             workdir = self._tmp.name
+        self._workdir = os.path.abspath(workdir)
         try:
             os.chdir(workdir)
             with _suppress_fd_output():
@@ -559,6 +566,62 @@ class Session:
                     break
                 n += 1
         return n
+
+    # --- data output / restart -------------------------------------------
+    def write_output(self, number: int = 0, checkpoint: bool = False) -> str:
+        """Write the full simulation state to disk (Group_WriteAllData): the
+        same HDF5 data dump Enzo writes -- grid data, hierarchy, external
+        boundary and a parameter file -- into this session's working directory
+        (named from the run's DataDumpName + ``number``).  ``checkpoint=True``
+        flags it as a checkpoint.  Returns the absolute path of the dump's
+        hierarchy/parameter file, ready to pass to ``Session.from_output``."""
+        cwd = os.getcwd()
+        os.chdir(self._workdir)
+        try:
+            with _suppress_fd_output():
+                rc = self._lib.enzomodules_session_write_output(
+                    self._h, int(number), 1 if checkpoint else 0)
+            if rc:
+                raise RuntimeError("write_output (Group_WriteAllData) failed")
+            # Locate the dump by its .hierarchy file (robust to Enzo's naming).
+            hier = [f for f in os.listdir(".") if f.endswith(".hierarchy")]
+            if not hier:
+                raise RuntimeError("write_output produced no hierarchy file")
+            hier.sort(key=lambda f: os.path.getmtime(f))   # newest = this dump
+            name = hier[-1][:-len(".hierarchy")]
+            return os.path.join(self._workdir, name)
+        finally:
+            os.chdir(cwd)
+
+    @classmethod
+    def from_output(cls, path: str) -> "Session":
+        """Reload a session from a dump written by ``write_output`` (or by Enzo
+        itself): Group_ReadAllData restores the parameter file, external
+        boundary, hierarchy and grid data.  ``path`` is the dump's
+        hierarchy/parameter file (the value ``write_output`` returned, with or
+        without the ``.hierarchy`` suffix)."""
+        if not available():
+            raise RuntimeError("grid solver library not built")
+        path = os.path.abspath(path)
+        if path.endswith(".hierarchy"):
+            path = path[:-len(".hierarchy")]
+        workdir = os.path.dirname(path)
+        name = os.path.basename(path)
+        self = cls.__new__(cls)
+        self._lib = _lib()
+        self._tmp = None
+        self._workdir = workdir
+        self._stop_override = None
+        cwd = os.getcwd()
+        os.chdir(workdir)
+        try:
+            with _suppress_fd_output():
+                self._h = self._lib.enzomodules_session_from_output(name.encode())
+        finally:
+            os.chdir(cwd)
+        if not self._h:
+            raise RuntimeError(f"from_output (Group_ReadAllData) failed for {path}")
+        return self
 
     def close(self):
         if getattr(self, "_h", None):
