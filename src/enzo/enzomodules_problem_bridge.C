@@ -103,6 +103,9 @@ int StarParticleFinalize(HierarchyEntry *Grids[], TopGridData *MetaData,
                          int NumberOfGrids, LevelHierarchyEntry *LevelArray[],
                          int level, Star *&AllStars,
                          int TotalStarParticleCountPrevious[], int &OutputNow);
+int ComputeDednerWaveSpeeds(TopGridData *MetaData,
+                            LevelHierarchyEntry *LevelArray[], int level,
+                            double dt0);
 int EvolveHierarchy(HierarchyEntry &TopGrid, TopGridData &MetaData,
                     ExternalBoundary *Exterior,
 #ifdef TRANSFER
@@ -625,6 +628,15 @@ void enzomodules_session_set_dt(void *h, int level, double dt)
  * create_fluxes(level) was called first, the boundary fluxes are accumulated
  * into the per-level flux storage (needed for conservative AMR flux
  * correction); otherwise no subgrid fluxes are recorded (fine for unigrid). */
+/* Advance the hydro/MHD equations one step on `level`.  Dispatches on
+ * HydroMethod, mirroring EvolveLevel:
+ *  - PPM (0), Zeus (2), constrained-transport MHD (MHD_Li, 6): the single-call
+ *    Grid::SolveHydroEquations.
+ *  - Runge-Kutta HD (HD_RK, 3) and MHD (MHD_RK, 4): the 2nd-order two-step
+ *    integration (1st step, refresh boundaries, 2nd step), with Dedner wave
+ *    speeds computed up front for MHD_RK.  (The optional RK2 gravity re-deposit
+ *    EvolveLevel does for self-gravitating RK runs is omitted; call gravity()
+ *    around solve_hydro for that case.) */
 int enzomodules_session_solve_hydro(void *h, int level)
 {
   EMProblem *p = (EMProblem *)h;
@@ -633,11 +645,62 @@ int enzomodules_session_solve_hydro(void *h, int level)
   int *nsub = p->NumberOfSubgrids[level];
   fluxes ***flux = p->SubgridFluxesEstimate[level];
   int rc = 0;
+
+  if (HydroMethod != HD_RK && HydroMethod != MHD_RK) {
+    for (int i = 0; i < n; i++) {
+      int ns = nsub ? nsub[i] : 0;
+      fluxes **sf = flux ? flux[i] : NULL;
+      if (Grids[i]->GridData->SolveHydroEquations(p->MetaData.CycleNumber, ns,
+                                                  sf, level) == FAIL) rc = 1;
+    }
+    delete[] Grids;
+    return rc;
+  }
+
+  /* --- Runge-Kutta two-step path (HD_RK / MHD_RK) --- */
+  /* Set the global NColor from the grid's fields (default INT_UNDEFINED); the
+   * RK solvers size their primitive arrays as NEQ+NSpecies+NColor, so this must
+   * run first or those stack arrays get a garbage size.  The RK driver does the
+   * same on Grids[0]. */
+  if (n > 0) Grids[0]->GridData->SetNumberOfColours();
+
+  double dt = (n > 0) ? (double)Grids[0]->GridData->ReturnTimeStep() : 0.0;
+  if (HydroMethod == MHD_RK && level == 0)
+    ComputeDednerWaveSpeeds(&p->MetaData, p->LevelArray, level, dt);
+
   for (int i = 0; i < n; i++) {
     int ns = nsub ? nsub[i] : 0;
     fluxes **sf = flux ? flux[i] : NULL;
-    if (Grids[i]->GridData->SolveHydroEquations(p->MetaData.CycleNumber, ns,
-                                                sf, level) == FAIL) rc = 1;
+    if (HydroMethod == HD_RK) {
+      if (Grids[i]->GridData->RungeKutta2_1stStep(sf, ns, level,
+                                                  &p->Exterior) == FAIL) rc = 1;
+    } else {
+      if (Grids[i]->GridData->MHDRK2_1stStep(sf, ns, level,
+                                             &p->Exterior) == FAIL) rc = 1;
+    }
+  }
+
+  /* Refresh boundaries between the RK sub-steps (uses the sibling list built by
+   * set_boundary; rebuild it if absent). */
+  SiblingGridList *SiblingList = p->SiblingGridListStorage[level];
+  if (SiblingList == NULL) {
+    SiblingList = new SiblingGridList[n];
+    CreateSiblingList(Grids, n, SiblingList, 0, &p->MetaData, level);
+    p->SiblingGridListStorage[level] = SiblingList;
+  }
+  SetBoundaryConditions(Grids, n, SiblingList, level, &p->MetaData,
+                        &p->Exterior, p->LevelArray[level]);
+
+  for (int i = 0; i < n; i++) {
+    int ns = nsub ? nsub[i] : 0;
+    fluxes **sf = flux ? flux[i] : NULL;
+    if (HydroMethod == HD_RK) {
+      if (Grids[i]->GridData->RungeKutta2_2ndStep(sf, ns, level,
+                                                  &p->Exterior) == FAIL) rc = 1;
+    } else {
+      if (Grids[i]->GridData->MHDRK2_2ndStep(sf, ns, level,
+                                             &p->Exterior) == FAIL) rc = 1;
+    }
   }
   delete[] Grids;
   return rc;

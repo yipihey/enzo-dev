@@ -163,6 +163,26 @@ def test_session_manual_steps():
         assert all(v > 0 for v in rho)
 
 
+def test_session_mhd_rk_runs():
+    """solve_hydro dispatches the Runge-Kutta MHD path (HD_RK / MHD_RK) on the
+    live hierarchy: the 2nd-order two-step integration (1st step, refresh
+    boundaries, 2nd step) with Dedner wave speeds and NColor set up first.  Run
+    the Brio-Wu MHD shock tube a few dozen cycles and check the solution stays
+    finite with the density (mass) conserved -- the RK MHD solver driven
+    step-by-step from Python, not just the kernel line-solvers.  (HD_RK uses the
+    same two-step machinery with RungeKutta2 in place of MHDRK2.)"""
+    path = _param("MHD/1D/BrioWu-MHD-1D/BrioWu-MHD-1D.enzo")
+    if not os.path.exists(path):
+        pytest.skip("BrioWu-MHD-1D parameter file missing")
+    with problems.Session(path) as s:
+        mass0 = sum(s.grid(0).field("Density"))
+        n = s.run_amr(max_cycles=40)
+        rho = s.grid(0).field("Density")
+        assert n > 0
+        assert all(v == v and abs(v) < 1e30 for v in rho)   # finite, no NaN/Inf
+        assert abs(sum(rho) - mass0) < 1e-6 * mass0          # mass conserved
+
+
 def test_session_gravity_chain_runs():
     """The self-gravity chain (deposit + Poisson solve + accelerations) runs on
     the live hierarchy of a self-gravitating problem."""
