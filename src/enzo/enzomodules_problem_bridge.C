@@ -91,13 +91,18 @@ int RadiativeTransferComputeTimestep(LevelHierarchyEntry *LevelArray[],
                                      int level);
 int SetSubgridMarker(TopGridData &MetaData, LevelHierarchyEntry *LevelArray[],
                      int level, int UpdateReplicatedGridsOnly);
+int StarParticleRadTransfer(LevelHierarchyEntry *LevelArray[], int level,
+                            Star *AllStars);
+#endif
+/* Star formation / feedback / activation lifecycle (not TRANSFER-specific). */
 int StarParticleInitialize(HierarchyEntry *Grids[], TopGridData *MetaData,
                            int NumberOfGrids, LevelHierarchyEntry *LevelArray[],
                            int ThisLevel, Star *&AllStars,
                            int TotalStarParticleCountPrevious[]);
-int StarParticleRadTransfer(LevelHierarchyEntry *LevelArray[], int level,
-                            Star *AllStars);
-#endif
+int StarParticleFinalize(HierarchyEntry *Grids[], TopGridData *MetaData,
+                         int NumberOfGrids, LevelHierarchyEntry *LevelArray[],
+                         int level, Star *&AllStars,
+                         int TotalStarParticleCountPrevious[], int &OutputNow);
 int EvolveHierarchy(HierarchyEntry &TopGrid, TopGridData &MetaData,
                     ExternalBoundary *Exterior,
 #ifdef TRANSFER
@@ -653,6 +658,58 @@ int enzomodules_session_solve_cooling(void *h, int level)
   for (int i = 0; i < n; i++)
     if (Grids[i]->GridData->MultiSpeciesHandler() == FAIL) rc = 1;
   delete[] Grids;
+  return rc;
+}
+
+/* Run the star-particle lifecycle on `level`, the same sequence EvolveLevel
+ * drives: StarParticleInitialize (gather existing stars into the AllStars list +
+ * set feedback flags), then per-grid StarParticleHandler (star formation + the
+ * feedback deposit, STARMAKE_METHOD), then StarParticleFinalize (ActivateNewStar
+ * -- flip newly-formed/aged particles to active radiating stars -- and sync back
+ * to the grids).  A clean no-op (returns 0) when both StarParticleCreation and
+ * StarParticleFeedback are off.  Call after solve_hydro(level)/solve_cooling so
+ * formation sees the updated gas; a later evolve_photons(level, stars=True) then
+ * radiates from the now-active stars. */
+int enzomodules_session_star_particles(void *h, int level)
+{
+  EMProblem *p = (EMProblem *)h;
+  if (!StarParticleCreation && !StarParticleFeedback) return 0;
+
+  HierarchyEntry **Grids;
+  int n = GenerateGridArray(p->LevelArray, level, &Grids);
+  if (n == 0) { delete[] Grids; return 0; }
+
+  Star *AllStars = NULL;
+  int *TotalPrev = new int[n];
+  for (int i = 0; i < n; i++) TotalPrev[i] = 0;
+
+  /* The grid's own timestep drives formation/feedback; for a single-level
+   * session the level dt and the root timestep coincide. */
+  float dt = Grids[0]->GridData->ReturnTimeStep();
+
+  int rc = 0;
+  /* Gather existing star particles into Star objects + the AllStars list and
+   * set their feedback flags (FindAllStarParticles, gated on
+   * FirstTimestepAfterRestart, builds the Star objects from the particles). */
+  if (StarParticleInitialize(Grids, &p->MetaData, n, p->LevelArray, level,
+                             AllStars, TotalPrev) == FAIL) rc = 1;
+
+  /* Star formation + feedback per grid. */
+  for (int i = 0; i < n; i++)
+    if (Grids[i]->GridData->StarParticleHandler(Grids[i]->NextGridNextLevel,
+                                                level, dt, dt) == FAIL) rc = 1;
+
+  /* Activate newly-formed / aged stars and sync the AllStars changes back to
+   * the grid particles (this is where a Pop III particle flips to an active,
+   * radiating star). */
+  int OutputNow = FALSE;
+  if (StarParticleFinalize(Grids, &p->MetaData, n, p->LevelArray, level,
+                           AllStars, TotalPrev, OutputNow) == FAIL) rc = 1;
+
+  delete[] TotalPrev;
+  delete[] Grids;
+  /* Formation/feedback may have created particles and redistributed them. */
+  em_recollect(p);
   return rc;
 }
 

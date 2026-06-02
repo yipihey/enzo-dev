@@ -96,9 +96,10 @@ def _lib():
         lib.enzomodules_session_cycle.restype = ctypes.c_int
         lib.enzomodules_session_cycle.argtypes = [ctypes.c_void_p]
         lib.enzomodules_session_compute_dt.argtypes = [ctypes.c_void_p, ctypes.c_int]
-        for fn in ("set_boundary", "solve_hydro", "solve_cooling", "rebuild",
-                   "gravity", "evolve_photons", "create_fluxes",
-                   "update_from_finer", "finalize_fluxes", "num_grids_on_level"):
+        for fn in ("set_boundary", "solve_hydro", "solve_cooling",
+                   "star_particles", "rebuild", "gravity", "evolve_photons",
+                   "create_fluxes", "update_from_finer", "finalize_fluxes",
+                   "num_grids_on_level"):
             f = getattr(lib, "enzomodules_session_" + fn)
             f.restype = ctypes.c_int
             f.argtypes = [ctypes.c_void_p, ctypes.c_int]
@@ -350,6 +351,22 @@ class Session:
         if self._lib.enzomodules_session_solve_cooling(self._h, level):
             raise RuntimeError(f"cooling/chemistry solve failed (level {level})")
 
+    def star_particles(self, level: int = 0) -> None:
+        """Run the star-particle lifecycle on `level` (the same sequence
+        EvolveLevel drives): StarParticleInitialize (gather stars, set feedback
+        flags) -> per-grid StarParticleHandler (star formation + feedback) ->
+        StarParticleFinalize (ActivateNewStar -- flip newly-formed/aged particles
+        to active, radiating stars, and sync back to the grids).  No-op unless
+        StarParticleCreation or StarParticleFeedback is on.  Call after
+        solve_hydro/solve_cooling; a later evolve_photons(stars=True) then
+        radiates from the now-active stars.
+
+        Note: a star only enters its radiating main-sequence window for its
+        (often short, e.g. Pop III) lifetime, so resolving it requires timesteps
+        finer than that lifetime."""
+        if self._lib.enzomodules_session_star_particles(self._h, level):
+            raise RuntimeError(f"star-particle lifecycle failed (level {level})")
+
     def advance_time(self, level: int = 0) -> None:
         self._lib.enzomodules_session_advance_time(self._h, level)
 
@@ -467,7 +484,7 @@ class Session:
     def evolve_level(self, level: int = 0, dt_above: float = 0.0,
                      gravity: bool = False, regrid: bool = True,
                      radiation: bool = False, star_sources: bool = False,
-                     cooling: bool = False) -> int:
+                     cooling: bool = False, star_formation: bool = False) -> int:
         """A Python re-implementation of Enzo's recursive EvolveLevel, built
         entirely from the certified session steps.  Mirrors the legacy control
         flow: clear the boundary fluxes once on entry, then sub-cycle this level
@@ -500,6 +517,8 @@ class Session:
             self.solve_hydro(level)                 # fills the boundary fluxes
             if cooling:
                 self.solve_cooling(level)           # radiative cooling + chemistry
+            if star_formation:
+                self.star_particles(level)          # form / feedback / activate
             self.update_particles(level)
             self.advance_time(level)
 
@@ -509,7 +528,8 @@ class Session:
                 self.set_boundary(level)            # refresh before projection
                 self.evolve_level(level + 1, dt_above=dt, gravity=gravity,
                                   regrid=regrid, radiation=radiation,
-                                  star_sources=star_sources, cooling=cooling)
+                                  star_sources=star_sources, cooling=cooling,
+                                  star_formation=star_formation)
                 self.update_from_finer(level)       # project + flux-correct
             self.finalize_fluxes(level)
 
@@ -523,15 +543,18 @@ class Session:
 
     def run_amr(self, gravity: bool = False, regrid: bool = True,
                 radiation: bool = False, star_sources: bool = False,
-                cooling: bool = False, max_cycles: int = 100000) -> int:
+                cooling: bool = False, star_formation: bool = False,
+                max_cycles: int = 100000) -> int:
         """Top-level driver mirroring EvolveHierarchy: an initial regrid, then
         repeatedly evolve the whole hierarchy one root step (``evolve_level(0)``)
         and regrid, until StopTime.  Pass ``gravity=True`` to include the
         self-gravity chain, ``radiation=True`` to emit + transport photons each
-        step, ``star_sources=True`` to radiate from star particles, and
-        ``cooling=True`` to solve radiative cooling + chemistry each step.  This
-        is a complete (optionally radiation-hydrodynamic + gravitating + cooling)
-        AMR run driven from Python on top of the certified legacy steps."""
+        step, ``star_sources=True`` to radiate from star particles,
+        ``cooling=True`` to solve radiative cooling + chemistry, and
+        ``star_formation=True`` to run the star formation/feedback/activation
+        lifecycle each step.  This is a complete (optionally
+        radiation-hydrodynamic + gravitating + cooling + star-forming) AMR run
+        driven from Python on top of the certified legacy steps."""
         n = 0
         with _suppress_fd_output():
             if regrid:
@@ -539,7 +562,7 @@ class Session:
             while self.time < self.stop_time and n < max_cycles:
                 self.evolve_level(0, gravity=gravity, regrid=regrid,
                                   radiation=radiation, star_sources=star_sources,
-                                  cooling=cooling)
+                                  cooling=cooling, star_formation=star_formation)
                 if regrid:
                     self.rebuild(0)
                 n += 1

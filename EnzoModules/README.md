@@ -283,12 +283,9 @@ Two source modes:
   (e.g. `PhotonTest`).
 - `evolve_photons(level, stars=True)` — gather the grid's **star particles**
   (`StarParticleInitialize`) and convert the active ones into radiation sources
-  (`StarParticleRadTransfer`), so star particles radiate.  (A star only emits
-  once Enzo's formation lifecycle has marked it an active radiation source —
-  `type > 0`, alive, non-formation feedback flag; until then it is correctly a
-  no-op.)  `tests/test_session.py` runs this on `ProblemType 252` (a single
-  radiating Pop III star) — a path that used to segfault and now completes
-  cleanly.
+  (`StarParticleRadTransfer`), so star particles radiate.  A star only emits once
+  Enzo's formation lifecycle has marked it an active radiation source (`type > 0`,
+  alive, non-formation feedback flag) — which `star_particles` (below) drives.
 
 **RT-stack hardening.**  Because this library keeps one set of Enzo globals for
 the whole process, radiative-transfer state could leak between `Session`
@@ -395,6 +392,27 @@ recognized dump-name pattern (otherwise the name is built from uninitialized
 stack memory), so the bridge passes the run's `DataDumpName` and writes directly
 to the session's working directory with a deterministic `<DataDumpName><id>`
 name; and `from_output` raises a Python error on a bad dump instead of aborting.
+
+#### Star formation, feedback & activation (radiating stars)
+
+`Session.star_particles(level)` runs the star-particle lifecycle EvolveLevel
+drives: `StarParticleInitialize` (gather stars, set feedback flags) → per-grid
+`StarParticleHandler` (star formation + feedback, `STARMAKE_METHOD`) →
+`StarParticleFinalize` / `ActivateNewStar` (flip newly-formed / aged particles
+into **active, radiating** stars and sync back to the grids).  No-op unless
+`StarParticleCreation` or `StarParticleFeedback` is on.
+
+This was P0 gap #3, and it closes the loop on radiating stars: previously a Pop
+III star stayed *unborn* (`type < 0`), so `evolve_photons(stars=True)` was a
+no-op.  With `star_particles` it **activates and radiates** —
+`tests/test_session.py` drives `ProblemType 252` (a single Pop III star) with
+`star_particles` + `evolve_photons(stars=True)` and shows the star ionizes the
+surrounding gas into a Strömgren sphere whose illuminated volume grows
+monotonically (a propagating I-front).  The one subtlety is temporal resolution:
+a star radiates only during its (short, for Pop III) main-sequence lifetime, so
+the timestep must be finer than that lifetime to catch it — with the default
+light-crossing dt the star is born and supernovae within one step.  In a Python
+driver: `run_amr(radiation=True, star_sources=True, star_formation=True)`.
 
 - **Multi-grid (AMR) photon transport** (`bridge.raytrace_twogrid`) — a ray
   crossing two tiled grids (the legacy `SubgridMarker` -> `FindPhotonNewGrid`

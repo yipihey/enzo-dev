@@ -399,6 +399,52 @@ def test_session_evolve_photons_star_sources():
         assert all(v >= 0 for v in kph)              # rates stay non-negative
 
 
+def test_session_star_particle_lifecycle_radiates():
+    """The full star-particle lifecycle makes a star form, activate and RADIATE.
+    Driving ProblemType 252 (a single Pop III star) with star_particles
+    (StarParticleInitialize -> StarParticleHandler -> StarParticleFinalize /
+    ActivateNewStar) plus evolve_photons(stars=True), at timesteps finer than the
+    star's lifetime, the star activates (type flips from unborn to active) and
+    ionizes the surrounding gas: a Stromgren I-front whose illuminated volume
+    grows monotonically.  This is the end-to-end proof that the formation ->
+    feedback -> activation -> radiation chain works (previously the star never
+    activated, so evolve_photons(stars=True) was a no-op)."""
+    import enzomodules.problems as P
+    path = _param("StarParticle/RadiatingStarParticleSingleTest/"
+                  "TestRadiatingStarParticleSingle.enzo")
+    if not os.path.exists(path):
+        pytest.skip("RadiatingStarParticleSingleTest parameter file missing")
+    with problems.Session(path) as s:
+        g = s.grid(0)
+        ncells = []
+        with P._suppress_fd_output():
+            for _ in range(8):
+                s.set_boundary(0)
+                # timestep finer than the star's (short Pop III) lifetime, so we
+                # resolve its radiating main-sequence window
+                s.set_dt(0, min(s.compute_dt(0), 0.03))
+                s.star_particles(0)                  # form / feedback / activate
+                s.evolve_photons(0, stars=True)      # radiate from active star
+                s.advance_time(0)
+                kph = g.field("kphHI")
+                ncells.append(sum(1 for v in kph if v > 0))
+        assert max(ncells) > 0                       # the star radiated
+        assert ncells[-1] > ncells[0]                # I-front propagated outward
+        assert ncells == sorted(ncells)              # illuminated volume grew monotonically
+
+
+def test_session_star_particles_noop():
+    """Hardening: star_particles is a clean no-op on a problem with no star
+    physics (Toro-1), leaving the state intact."""
+    import enzomodules.problems as P
+    with problems.Session(_toro1()) as s:
+        rho0 = list(s.grid(0).field("Density"))
+        with P._suppress_fd_output():
+            s.set_dt(0, s.compute_dt(0))
+            s.star_particles(0)                      # no-op
+        assert list(s.grid(0).field("Density")) == rho0
+
+
 def test_session_evolve_photons_noop_without_rt():
     """Hardening: evolve_photons (both source modes) is a clean no-op on a
     problem with RadiativeTransfer off, and leaves the hydro path intact."""

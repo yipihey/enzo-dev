@@ -37,6 +37,10 @@ step, 🟡 partial / kernel-level only, or ❌ missing.
 - ✅ **Data output + checkpoint/restart** — `write_output` (`Group_WriteAllData`)
   / `from_output` (`Group_ReadAllData`); bitwise restart certified.
   *(was P0 gap #2; done)*
+- ✅ **Star formation / feedback / activation** — `star_particles`
+  (`StarParticleInitialize` → `StarParticleHandler` → `StarParticleFinalize` /
+  `ActivateNewStar`); a Pop III star now activates and radiates. *(was P0 gap #3;
+  done)*
 - ✅ **Drivers** — `evolve_level` (recursive Python EvolveLevel), `run_amr`,
   `step`, `run`.
 - ✅ **Inspection** — field + particle getters per grid.
@@ -54,12 +58,12 @@ step, 🟡 partial / kernel-level only, or ❌ missing.
 
 ## 2. Gaps, by priority
 
-### P0 — required for a physically complete step
+### P0 — required for a physically complete step  *(all done)*
 
 | Gap | Enzo entry point | Why it matters | Suggested API |
 |-----|------------------|----------------|---------------|
 | ✅ ~~**Radiative cooling + non-equilibrium chemistry**~~ **— DONE** | `Grid::MultiSpeciesHandler` / `SolveRadiativeCooling` / `GrackleWrapper`, called from `EvolveLevel.C:671` — a **separate** step, *not* inside `solve_hydro` | The Session can do adiabatic + RT hydro but **cannot cool or evolve species** standalone. This was the single biggest missing physics step. | ✅ `session.solve_cooling(level)` (+ `cooling=True` in `evolve_level`/`run_amr`) |
-| **Star formation + feedback** | `StarParticleInitialize` → star makers (`STARMAKE_METHOD`) → `Grid::StarParticleHandler` (feedback) → `StarParticleFinalize` / `ActivateNewStar` | Only `StarParticleInitialize` is reached today (inside `evolve_photons(stars=True)`). The full lifecycle — formation, feedback deposition, activation — is unexposed; this is why a Pop III star never *activates* to radiate. | `session.star_particles(level)` (init + handler + finalize) |
+| ✅ ~~**Star formation + feedback**~~ **— DONE** | `StarParticleInitialize` → star makers (`STARMAKE_METHOD`) → `Grid::StarParticleHandler` (feedback) → `StarParticleFinalize` / `ActivateNewStar` | The full lifecycle — formation, feedback deposition, activation — is now driven, so a Pop III star activates and radiates (resolve its main-sequence window with a sub-lifetime timestep). | ✅ `session.star_particles(level)` (+ `star_formation=True` in `evolve_level`/`run_amr`) |
 | ✅ ~~**Data output / checkpoint + restart**~~ **— DONE** | `Group_WriteAllData` / `Group_ReadAllData` | The Session could not persist or reload state. Now it can; bitwise restart is certified. | ✅ `session.write_output(number)`, `Session.from_output(path)` |
 
 ### P1 — broaden physics coverage
@@ -100,7 +104,9 @@ test that pins the bridge against the legacy reference. Current state:
   init/restart-failure).
 - 🟡 **Zeus, RK hydro/MHD, CT-MHD** — kernel tests only; no live-hierarchy
   `solve_hydro` certification.
-- ❌ **Star formation, cosmology** — untested at the Session level (unexposed).
+- ✅ **Star formation / feedback / activation** — end-to-end test: a Pop III star
+  activates and drives a propagating Strömgren I-front.
+- ❌ **Cosmology** — untested at the Session level (unexposed).
 
 ---
 
@@ -110,13 +116,16 @@ test that pins the bridge against the legacy reference. Current state:
    pairs with the existing `chemistry_step` kernel and RT coupling.
 2. ✅ **`write_output` + `from_output`** (P0) — **done**; bitwise checkpoint/
    restart, and dumps can be diffed against on-disk Enzo output.
-3. **`star_particles`** (P0) — completes the star lifecycle and makes
-   `evolve_photons(stars=True)` actually radiate.
+3. ✅ **`star_particles`** (P0) — **done**; completes the star lifecycle so
+   `evolve_photons(stars=True)` actually radiates (Pop III activates → I-front).
 4. **Extend `solve_hydro` to all `HydroMethod`s** (P1) — turns the kernel-level
-   RK/CT-MHD work into live-hierarchy steps, with certification.
+   RK/CT-MHD work into live-hierarchy steps, with certification.  *(next)*
 5. **`active_particles`, FLD/UV background, cosmology accessors** (P1).
 6. **P2 specialized physics** as needed by target science problems.
 
-With P0 complete, a Python driver could run a *cooling, star-forming,
-radiating* (radiation-hydro + gravity + AMR) simulation end to end and check it
-against a native Enzo run — the practical definition of "complete coverage."
+**All P0 gaps are now closed.**  A Python driver can run a *cooling,
+star-forming, radiating* (radiation-hydro + gravity + AMR) simulation end to end
+— `run_amr(gravity=True, cooling=True, radiation=True, star_sources=True,
+star_formation=True)` — checkpoint it, and reload it, every step built from a
+certified legacy call.  The remaining work (P1/P2) broadens method coverage and
+certification rather than filling a hole in a complete physics step.
