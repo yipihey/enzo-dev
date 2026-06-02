@@ -268,6 +268,12 @@ int enzomodules_problem_grid_size(void *h, int gi)
 void enzomodules_problem_get_field(void *h, int gi, int fi, double *out)
 { ((EMProblem *)h)->grids[gi]->EnzoModulesGetField(fi, out); }
 
+/* Write a field (flat, incl. ghost zones) back into the LIVE grid's BaryonField.
+ * Enables a host-language physics method to mutate the Enzo state in place (the
+ * ':julia' slot swap): read with get_field, compute, write back here. */
+void enzomodules_problem_set_field(void *h, int gi, int fi, const double *in)
+{ ((EMProblem *)h)->grids[gi]->EnzoModulesSetField(fi, in); }
+
 int enzomodules_problem_num_particles(void *h, int gi)
 { return ((EMProblem *)h)->grids[gi]->ReturnNumberOfParticles(); }
 
