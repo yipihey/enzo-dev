@@ -101,6 +101,11 @@ def _lib():
             f = getattr(lib, "enzomodules_session_" + fn)
             f.restype = None
         lib.enzomodules_session_set_dt.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_double]
+        # EvolvePhotons with a source-mode flag (0 = parameter-file sources,
+        # 1 = convert star particles into radiation sources).
+        lib.enzomodules_session_evolve_photons_ex.restype = ctypes.c_int
+        lib.enzomodules_session_evolve_photons_ex.argtypes = [
+            ctypes.c_void_p, ctypes.c_int, ctypes.c_int]
         for fn in ("advance_time", "update_particles", "copy_baryon_to_old",
                    "clear_boundary_fluxes"):
             getattr(lib, "enzomodules_session_" + fn).argtypes = [ctypes.c_void_p, ctypes.c_int]
@@ -335,14 +340,24 @@ class Session:
         """Drift particle positions by their grid's dtFixed."""
         self._lib.enzomodules_session_update_particles(self._h, level)
 
-    def evolve_photons(self, level: int = 0) -> None:
+    def evolve_photons(self, level: int = 0, stars: bool = False) -> None:
         """Emit and transport radiative-transfer photon packages, depositing
         photo-ionization / heating rates and coupling to the chemistry.  Sets up
         the SubgridMarker grid-ownership map, sizes the photon timestep, and
-        sub-cycles the photon time up to the grid time so the parameter-file
-        sources actually radiate.  No-op unless RadiativeTransfer is on (library
-        built with -DTRANSFER).  Call after set_dt(level, ...)."""
-        if self._lib.enzomodules_session_evolve_photons(self._h, level):
+        sub-cycles the photon time up to the grid time so the sources radiate.
+
+        ``stars=False`` (default) uses the radiation sources read from the
+        parameter file (e.g. PhotonTest).  ``stars=True`` instead gathers the
+        grid's star particles (StarParticleInitialize) and converts the active
+        ones into radiation sources (StarParticleRadTransfer), so star particles
+        radiate -- note a star only emits once Enzo's formation lifecycle has
+        marked it an active radiation source (type > 0, alive, non-formation
+        feedback flag).
+
+        No-op unless RadiativeTransfer is on (library built with -DTRANSFER).
+        Call after set_dt(level, ...)."""
+        if self._lib.enzomodules_session_evolve_photons_ex(
+                self._h, level, 1 if stars else 0):
             raise RuntimeError(f"EvolvePhotons failed (level {level})")
 
     # --- AMR conservation machinery (for a multi-level EvolveLevel) --------
@@ -379,7 +394,7 @@ class Session:
 
     def evolve_level(self, level: int = 0, dt_above: float = 0.0,
                      gravity: bool = False, regrid: bool = True,
-                     radiation: bool = False) -> int:
+                     radiation: bool = False, star_sources: bool = False) -> int:
         """A Python re-implementation of Enzo's recursive EvolveLevel, built
         entirely from the certified session steps.  Mirrors the legacy control
         flow: clear the boundary fluxes once on entry, then sub-cycle this level
@@ -403,7 +418,7 @@ class Session:
             self.set_dt(level, dt)
 
             if radiation:                           # emit + transport photons
-                self.evolve_photons(level)          # (couples to the chemistry)
+                self.evolve_photons(level, stars=star_sources)   # -> chemistry
 
             self.create_fluxes(level)               # allocate flux storage
             if gravity:
@@ -418,7 +433,8 @@ class Session:
             if self.num_grids_on_level(level + 1) > 0:
                 self.set_boundary(level)            # refresh before projection
                 self.evolve_level(level + 1, dt_above=dt, gravity=gravity,
-                                  regrid=regrid, radiation=radiation)
+                                  regrid=regrid, radiation=radiation,
+                                  star_sources=star_sources)
                 self.update_from_finer(level)       # project + flux-correct
             self.finalize_fluxes(level)
 
@@ -431,21 +447,22 @@ class Session:
         return n
 
     def run_amr(self, gravity: bool = False, regrid: bool = True,
-                radiation: bool = False, max_cycles: int = 100000) -> int:
+                radiation: bool = False, star_sources: bool = False,
+                max_cycles: int = 100000) -> int:
         """Top-level driver mirroring EvolveHierarchy: an initial regrid, then
         repeatedly evolve the whole hierarchy one root step (``evolve_level(0)``)
         and regrid, until StopTime.  Pass ``gravity=True`` to include the
-        self-gravity chain and ``radiation=True`` to emit + transport photons
-        each step.  This is a complete (optionally radiation-hydrodynamic +
-        gravitating) AMR run driven from Python on top of the certified legacy
-        steps."""
+        self-gravity chain, ``radiation=True`` to emit + transport photons each
+        step, and ``star_sources=True`` to radiate from star particles.  This is
+        a complete (optionally radiation-hydrodynamic + gravitating) AMR run
+        driven from Python on top of the certified legacy steps."""
         n = 0
         with _suppress_fd_output():
             if regrid:
                 self.rebuild(0)
             while self.time < self.stop_time and n < max_cycles:
                 self.evolve_level(0, gravity=gravity, regrid=regrid,
-                                  radiation=radiation)
+                                  radiation=radiation, star_sources=star_sources)
                 if regrid:
                     self.rebuild(0)
                 n += 1

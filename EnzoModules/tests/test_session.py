@@ -225,6 +225,45 @@ def test_session_evolve_photons_ionization_front():
         assert fracs[-1] > fracs[0] * 2
 
 
+def test_session_evolve_photons_star_sources():
+    """The star-particle radiation path (StarParticleInitialize ->
+    StarParticleRadTransfer -> EvolvePhotons) runs on a live hierarchy with a
+    star particle (ProblemType 252).  This used to segfault (no SubgridMarker,
+    unsized dtPhoton); it now completes cleanly.  Whether the star emits depends
+    on Enzo's formation lifecycle marking it an active radiation source, so we
+    assert the pipeline is robust rather than a specific deposited rate."""
+    import enzomodules.problems as P
+    path = _param("StarParticle/RadiatingStarParticleSingleTest/"
+                  "TestRadiatingStarParticleSingle.enzo")
+    if not os.path.exists(path):
+        pytest.skip("RadiatingStarParticleSingleTest parameter file missing")
+    with problems.Session(path) as s:
+        g = s.grid(0)
+        assert g.num_particles >= 1                  # the star particle exists
+        assert "kphHI" in g.field_names              # RT fields allocated
+        with P._suppress_fd_output():
+            s.set_boundary(0)
+            s.set_dt(0, s.compute_dt(0))
+            s.evolve_photons(0, stars=True)          # crash-free (raises on FAIL)
+            kph = g.field("kphHI")
+        assert all(v >= 0 for v in kph)              # rates stay non-negative
+
+
+def test_session_evolve_photons_noop_without_rt():
+    """Hardening: evolve_photons (both source modes) is a clean no-op on a
+    problem with RadiativeTransfer off, and leaves the hydro path intact."""
+    import enzomodules.problems as P
+    with problems.Session(_toro1()) as s:
+        with P._suppress_fd_output():
+            s.set_boundary(0)
+            s.set_dt(0, s.compute_dt(0))
+            s.evolve_photons(0)                      # no RT -> no-op, no crash
+            s.evolve_photons(0, stars=True)          # no-op, no crash
+            s.run(0)                                 # hydro unaffected
+        assert abs(s.time - s.stop_time) < 1e-6 * s.stop_time
+        assert all(v > 0 for v in s.grid(0).field("Density"))
+
+
 def test_session_radiation_hydro_coupled():
     """The recursive Python EvolveLevel with radiation=True drives a coupled
     radiation-hydrodynamics AMR problem (PhotonTestAMR: hydro + RT + AMR),

@@ -80,6 +80,12 @@ int RadiativeTransferComputeTimestep(LevelHierarchyEntry *LevelArray[],
                                      int level);
 int SetSubgridMarker(TopGridData &MetaData, LevelHierarchyEntry *LevelArray[],
                      int level, int UpdateReplicatedGridsOnly);
+int StarParticleInitialize(HierarchyEntry *Grids[], TopGridData *MetaData,
+                           int NumberOfGrids, LevelHierarchyEntry *LevelArray[],
+                           int ThisLevel, Star *&AllStars,
+                           int TotalStarParticleCountPrevious[]);
+int StarParticleRadTransfer(LevelHierarchyEntry *LevelArray[], int level,
+                            Star *AllStars);
 #endif
 int EvolveHierarchy(HierarchyEntry &TopGrid, TopGridData &MetaData,
                     ExternalBoundary *Exterior,
@@ -262,6 +268,18 @@ void *enzomodules_session_init(const char *paramfile)
     p->SubgridFluxesEstimate[l] = NULL;
   }
 
+  /* Hardening: several radiative-transfer globals are reset only by
+   * RadiativeTransferReadParameters (the RT-on path), not by
+   * SetDefaultGlobalValues.  Because this library keeps one set of Enzo globals
+   * for the whole process, they leak from a prior RT session into a later
+   * non-RT one -- e.g. RadiationPressure left at 1 makes the PPM solver expect a
+   * gravity AccelerationField that a pure-hydro problem never built, and it
+   * segfaults.  Reset them up front so each session starts clean; an RT problem
+   * re-reads its own values in RadiativeTransferInitialize below. */
+#ifdef TRANSFER
+  RadiationPressure = FALSE;
+#endif
+
   char *fname = strdup(paramfile);
   int rc = InitializeNew(fname, p->TopGrid, p->MetaData, p->Exterior, &p->dt);
   if (rc == FAIL) { free(fname); delete p; return NULL; }
@@ -363,18 +381,45 @@ void enzomodules_session_update_particles(void *h, int level)
  * actually emit and deposit photo-ionization/heating rates.  No-op unless
  * RadiativeTransfer is on (and the library was built with -DTRANSFER).
  *
- * The radiation sources come from RadiativeTransferInitialize (which read them
- * from the parameter file in session_init).  We deliberately do NOT call
- * RadiativeTransferPrepare here: its StarParticleRadTransfer rebuilds the source
- * list from star particles and would wipe the parameter-file sources.  Instead
- * we size dtPhoton with RadiativeTransferComputeTimestep (which leaves the
- * source list untouched) and let EvolvePhotons sub-cycle and emit. */
-int enzomodules_session_evolve_photons(void *h, int level)
+ * Two source modes:
+ *  - use_star_sources == 0 (default): use the radiation sources that
+ *    RadiativeTransferInitialize read from the parameter file (e.g. PhotonTest).
+ *    We deliberately do NOT call RadiativeTransferPrepare, whose
+ *    StarParticleRadTransfer would rebuild the list from star particles and wipe
+ *    those sources.
+ *  - use_star_sources != 0: gather the grid's star particles into the AllStars
+ *    list (StarParticleInitialize) and convert them into radiation sources
+ *    (StarParticleRadTransfer), so stars radiate (e.g. ProblemType 252).
+ * In both cases we size dtPhoton with RadiativeTransferComputeTimestep and let
+ * EvolvePhotons sub-cycle and emit. */
+int enzomodules_session_evolve_photons_ex(void *h, int level,
+                                          int use_star_sources)
 {
   EMProblem *p = (EMProblem *)h;
 #ifdef TRANSFER
-  /* RestartPhotons (gated on this flag) would also rebuild from star particles;
-   * clear it so EvolvePhotons just transports the existing sources. */
+  /* Hardening: nothing to do if radiative transfer is off or the level holds no
+   * grids -- return success rather than walking null state. */
+  if (!RadiativeTransfer) return 0;
+  if (p->LevelArray[level] == NULL) return 0;
+
+  HierarchyEntry **Grids;
+  int n = GenerateGridArray(p->LevelArray, level, &Grids);
+  if (n == 0) { delete[] Grids; return 0; }
+  Star *AllStars = NULL;
+
+  if (use_star_sources) {
+    /* Build the master star list from the grid particles.  FindAllStarParticles
+     * (which turns star particles into Star objects) is gated on
+     * FirstTimestepAfterRestart, so leave that flag set until after this call. */
+    int *TotalPrev = new int[n > 0 ? n : 1];
+    for (int i = 0; i < n; i++) TotalPrev[i] = 0;
+    StarParticleInitialize(Grids, &p->MetaData, n, p->LevelArray, level,
+                           AllStars, TotalPrev);
+    delete[] TotalPrev;
+  }
+
+  /* RestartPhotons (gated on this flag) would rebuild the field from scratch;
+   * clear it so EvolvePhotons just transports the current sources. */
   p->MetaData.FirstTimestepAfterRestart = FALSE;
 
   /* Build the per-cell SubgridMarker (grid-ownership map the photon transport
@@ -382,18 +427,18 @@ int enzomodules_session_evolve_photons(void *h, int level)
    * the photon walk dereferences it, so it must exist. */
   SetSubgridMarker(p->MetaData, p->LevelArray, level, FALSE);
 
-  /* Size the photon timestep (light-crossing / CFL based) without disturbing
-   * the source list. */
+  /* Size the photon timestep (light-crossing / CFL based). */
   RadiativeTransferComputeTimestep(p->LevelArray, &p->MetaData, 0.0, level);
 
-  HierarchyEntry **Grids;
-  int n = GenerateGridArray(p->LevelArray, level, &Grids);
+  if (use_star_sources)
+    /* Convert the star particles into the radiation-source list. */
+    StarParticleRadTransfer(p->LevelArray, level, AllStars);
+
   FLOAT GridTime = (n > 0)
     ? Grids[0]->GridData->ReturnTime() + Grids[0]->GridData->ReturnTimeStep()
     : p->MetaData.Time;
   delete[] Grids;
 
-  Star *AllStars = NULL;
   /* LoopTime=1: sub-cycle PhotonTime up to GridTime in dtPhoton steps so the
    * sources emit (the first sub-cycle just advances PhotonTime past the source
    * creation time; subsequent ones deposit). */
@@ -402,6 +447,12 @@ int enzomodules_session_evolve_photons(void *h, int level)
 #else
   return 0;
 #endif
+}
+
+/* Backward-compatible entry: parameter-file sources. */
+int enzomodules_session_evolve_photons(void *h, int level)
+{
+  return enzomodules_session_evolve_photons_ex(h, level, 0);
 }
 
 /* CFL timestep for `level`: min over grids, clamped to StopTime. */

@@ -271,12 +271,35 @@ hierarchy; their physics is certified in the dedicated bridge tests
 
 `evolve_photons` is **fully emitting**: it builds the `SubgridMarker`
 grid-ownership map, sizes the photon timestep, and sub-cycles the photon time so
-the parameter-file sources actually radiate — depositing photo-ionization /
-heating rates and coupling to the chemistry.  `tests/test_session.py` drives the
-`PhotonTest` Strömgren-sphere problem through the session and checks that the
-ionization front propagates (the ionized fraction grows monotonically, the
-illuminated volume expands) — the full `EvolvePhotons` orchestration, not just
-the ray-tracer kernels (which are separately certified in `test_radiation.py`).
+the sources actually radiate — depositing photo-ionization / heating rates and
+coupling to the chemistry.  `tests/test_session.py` drives the `PhotonTest`
+Strömgren-sphere problem through the session and checks that the ionization
+front propagates (the ionized fraction grows monotonically, the illuminated
+volume expands) — the full `EvolvePhotons` orchestration, not just the
+ray-tracer kernels (which are separately certified in `test_radiation.py`).
+
+Two source modes:
+- `evolve_photons(level)` — the radiation sources read from the parameter file
+  (e.g. `PhotonTest`).
+- `evolve_photons(level, stars=True)` — gather the grid's **star particles**
+  (`StarParticleInitialize`) and convert the active ones into radiation sources
+  (`StarParticleRadTransfer`), so star particles radiate.  (A star only emits
+  once Enzo's formation lifecycle has marked it an active radiation source —
+  `type > 0`, alive, non-formation feedback flag; until then it is correctly a
+  no-op.)  `tests/test_session.py` runs this on `ProblemType 252` (a single
+  radiating Pop III star) — a path that used to segfault and now completes
+  cleanly.
+
+**RT-stack hardening.**  Because this library keeps one set of Enzo globals for
+the whole process, radiative-transfer state could leak between `Session`
+instances.  `evolve_photons` is a clean no-op when `RadiativeTransfer` is off or
+a level is empty, builds the `SubgridMarker` the photon walk dereferences (a
+former segfault), sizes `dtPhoton` *without* calling `RadiativeTransferPrepare`
+(whose `StarParticleRadTransfer` would wipe the parameter-file sources), and
+`session_init` resets `RadiationPressure` (reset only on the RT-on path in stock
+Enzo, so it otherwise leaked into a later pure-hydro session and made the PPM
+solver dereference a missing gravity field).  `tests/test_session.py` exercises
+the RT→non-RT transition to lock this down.
 
 #### Writing EvolveLevel itself in Python
 
@@ -295,8 +318,9 @@ with Session("run/Hydro/Hydro-2D/ImplosionAMR/ImplosionAMR.enzo") as s:
 ```
 
 `evolve_level` / `run_amr` take `gravity=True` (run the self-gravity chain each
-step) and `radiation=True` (emit + transport photons each step), so the same
-Python driver does gravitating, radiation-hydrodynamic AMR runs.
+step), `radiation=True` (emit + transport photons each step) and
+`star_sources=True` (radiate from star particles), so the same Python driver
+does gravitating, radiation-hydrodynamic AMR runs.
 
 `tests/test_session.py` runs this on the 4-level `ImplosionAMR` problem — the
 recursion, sub-cycling, flux correction, projection and regridding all fire (the
