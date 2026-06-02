@@ -334,6 +334,30 @@ recursive `EvolveLevel`, including self-gravity and radiative transfer — can n
 be written in Python on top of EnzoModules, with each step verified against the
 legacy reference.
 
+#### Inline halo finder (FOF) + SUBFIND
+
+`Session.find_halos(subfind=False, linking_length=0.0, min_size=0)` runs Enzo's
+inline friends-of-friends halo finder — the same `FOF()` pipeline
+`EvolveHierarchy` runs inline — on the session's live particle hierarchy, and
+returns the catalogue *in memory* (a list of halo dicts: particle count, total /
+virial mass, virial radius, centre of mass, mean velocity, velocity dispersion,
+spin, angular momentum) sorted largest-first, instead of only writing it to
+disk.  Pass `subfind=True` to also run SUBFIND; `subhalo_count()` then reports
+the number of gravitationally self-bound subgroups.  Halo properties come from
+the finder's own `get_particles`/`get_properties`, so the computation is the
+certified one, not re-derived.
+
+The finder *moves* the particles off the grids (`FOF_Initialize` /
+`MoveParticlesFOF`) and the bridge calls `FOF_Finalize` to restore and
+redistribute them, so `find_halos` is **repeatable and non-destructive**: the
+total particle count is conserved and the session keeps evolving afterwards.  It
+is a clean no-op (returns `[]`) on a particle-free problem, and `min_size` is
+clamped to SUBFIND's neighbour requirement so a small value can't abort the run.
+`tests/test_session.py` drives it on `GravityTest` (5000 particles): FOF groups
+grow with the linking length, SUBFIND resolves subgroups in the big clump,
+particle count is conserved across repeated calls, and the hydro still advances
+afterwards.
+
 - **Multi-grid (AMR) photon transport** (`bridge.raytrace_twogrid`) — a ray
   crossing two tiled grids (the legacy `SubgridMarker` -> `FindPhotonNewGrid`
   handoff) attenuates exactly as one grid of the combined length

@@ -109,6 +109,86 @@ def test_session_gravity_chain_runs():
             s.update_particles(0)
 
 
+def test_session_inline_halo_finder():
+    """Enzo's inline FOF halo finder runs on the live particle hierarchy
+    (GravityTest, 5000 particles) and returns a consistent catalogue: at least
+    one halo, each at least min_size particles, all grouped particles within the
+    total, centre of mass inside the box."""
+    path = _param("GravitySolver/GravityTest/GravityTest.enzo")
+    if not os.path.exists(path):
+        pytest.skip("GravityTest parameter file missing")
+    import enzomodules.problems as P
+    with problems.Session(path) as s:
+        with P._suppress_fd_output():
+            halos = s.find_halos(linking_length=0.2, min_size=32)
+        total = sum(s.grid(i).num_particles for i in range(s.num_grids))
+        assert total == 5000
+        assert len(halos) >= 1
+        assert halos == sorted(halos, key=lambda h: -h["n"])   # largest first
+        grouped = sum(h["n"] for h in halos)
+        assert 0 < grouped <= total
+        for h in halos:
+            assert h["n"] >= 32
+            assert all(0.0 <= c <= 1.0 for c in h["center"])
+        # a larger linking length percolates more particles into halos
+        with P._suppress_fd_output():
+            halos_b = s.find_halos(linking_length=0.6, min_size=32)
+        assert sum(h["n"] for h in halos_b) >= grouped
+
+
+def test_session_inline_halo_finder_idempotent():
+    """The halo finder moves particles off the grids and restores them, so it is
+    repeatable: particle count is conserved, the catalogue is stable across
+    calls, and the session can still be evolved afterwards."""
+    path = _param("GravitySolver/GravityTest/GravityTest.enzo")
+    if not os.path.exists(path):
+        pytest.skip("GravityTest parameter file missing")
+    import enzomodules.problems as P
+    with problems.Session(path) as s:
+        counts = []
+        with P._suppress_fd_output():
+            for _ in range(3):
+                halos = s.find_halos(linking_length=0.2, min_size=32)
+                counts.append((len(halos), sum(s.grid(i).num_particles
+                                               for i in range(s.num_grids))))
+        assert all(c == counts[0] for c in counts)             # stable
+        assert counts[0][1] == 5000                            # conserved
+        # the session is still usable after halo finding
+        with P._suppress_fd_output():
+            s.set_boundary(0)
+            s.set_dt(0, s.compute_dt(0))
+            s.solve_hydro(0)
+            s.advance_time(0)
+        assert s.time > 0.0
+
+
+def test_session_subfind():
+    """SUBFIND finds subgroups inside the FOF halos (the big GravityTest clump
+    has >= 2*DesLinkNgb particles), reported via subhalo_count."""
+    path = _param("GravitySolver/GravityTest/GravityTest.enzo")
+    if not os.path.exists(path):
+        pytest.skip("GravityTest parameter file missing")
+    import enzomodules.problems as P
+    with problems.Session(path) as s:
+        with P._suppress_fd_output():
+            halos = s.find_halos(subfind=True, linking_length=0.2, min_size=32)
+        assert len(halos) >= 1
+        assert s.subhalo_count() >= 1          # at least one resolved subgroup
+
+
+def test_session_halo_finder_no_particles():
+    """Hardening: the halo finder is a clean no-op (returns []) on a problem
+    with no particles, and does not disturb the hydro state."""
+    import enzomodules.problems as P
+    with problems.Session(_toro1()) as s:
+        assert s.grid(0).num_particles == 0
+        with P._suppress_fd_output():
+            assert s.find_halos() == []
+            assert s.find_halos(subfind=True) == []
+            s.run(0)                            # hydro unaffected
+        assert all(v > 0 for v in s.grid(0).field("Density"))
+
+
 def test_python_evolve_level_matches_exact_riemann():
     """The recursive Python EvolveLevel (problems.Session.evolve_level), built
     only from the certified session steps, integrates the Toro-1 shock tube and

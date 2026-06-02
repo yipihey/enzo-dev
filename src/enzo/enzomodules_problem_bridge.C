@@ -241,6 +241,17 @@ void enzomodules_problem_get_particle_pos(void *h, int gi, int dim, double *out)
  * rather than handing the whole run to EvolveHierarchy.  The handle is the same
  * EMProblem (use the field accessors above to read the evolving state). */
 
+/* Internal accessors so sibling bridge translation units (e.g. the inline
+ * halo-finder bridge) can reach the live hierarchy on a session handle without
+ * duplicating the EMProblem layout.  extern "C" to dodge name mangling; the C++
+ * return types just need to be declared identically in the caller. */
+extern "C" LevelHierarchyEntry **EnzoModulesProblemLevelArray(void *h)
+{ return ((EMProblem *)h)->LevelArray; }
+
+extern "C" TopGridData *EnzoModulesProblemMetaData(void *h)
+{ return &((EMProblem *)h)->MetaData; }
+
+
 /* Initialize a problem and build its LevelArray for stepping.  Returns a
  * handle, or NULL on failure. */
 void *enzomodules_session_init(const char *paramfile)

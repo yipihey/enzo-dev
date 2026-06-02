@@ -106,6 +106,17 @@ def _lib():
         lib.enzomodules_session_evolve_photons_ex.restype = ctypes.c_int
         lib.enzomodules_session_evolve_photons_ex.argtypes = [
             ctypes.c_void_p, ctypes.c_int, ctypes.c_int]
+        # Inline FOF halo finder + SUBFIND.
+        lib.enzomodules_session_find_halos.restype = ctypes.c_int
+        lib.enzomodules_session_find_halos.argtypes = [
+            ctypes.c_void_p, ctypes.c_int, ctypes.c_double, ctypes.c_int]
+        lib.enzomodules_session_halo_count.restype = ctypes.c_int
+        lib.enzomodules_session_halo_count.argtypes = []
+        lib.enzomodules_session_subhalo_count.restype = ctypes.c_int
+        lib.enzomodules_session_subhalo_count.argtypes = []
+        lib.enzomodules_session_halo_property.restype = ctypes.c_double
+        lib.enzomodules_session_halo_property.argtypes = [
+            ctypes.c_int, ctypes.c_int]
         for fn in ("advance_time", "update_particles", "copy_baryon_to_old",
                    "clear_boundary_fluxes"):
             getattr(lib, "enzomodules_session_" + fn).argtypes = [ctypes.c_void_p, ctypes.c_int]
@@ -359,6 +370,50 @@ class Session:
         if self._lib.enzomodules_session_evolve_photons_ex(
                 self._h, level, 1 if stars else 0):
             raise RuntimeError(f"EvolvePhotons failed (level {level})")
+
+    def find_halos(self, subfind: bool = False, linking_length: float = 0.0,
+                   min_size: int = 0) -> list:
+        """Run Enzo's inline friends-of-friends halo finder (and SUBFIND if
+        ``subfind=True``) on the session's particles, returning a list of halo
+        dicts sorted largest-first.  Each dict has: ``n`` (particle count),
+        ``mass`` / ``virial_mass`` [Msun], ``virial_radius`` [kpc], ``center``
+        (x,y,z centre of mass), ``velocity`` (mean, km/s), ``vrms`` [km/s],
+        ``spin``, ``angular_momentum`` (x,y,z).  The total number of SUBFIND
+        subgroups is available afterwards via ``subhalo_count``.
+
+        ``linking_length`` (FOF b, in mean-interparticle-separation units) and
+        ``min_size`` (minimum particles per halo; clamped to >= 32, SUBFIND's
+        neighbour requirement) override HaloFinderLinkingLength /
+        HaloFinderMinimumSize when > 0.
+
+        The finder moves the particles off the grids and restores them
+        (FOF_Initialize/FOF_Finalize), so this is repeatable and leaves the
+        hierarchy's particle distribution intact (total count conserved).
+        Returns [] if the build has no particles."""
+        n = self._lib.enzomodules_session_find_halos(
+            self._h, 1 if subfind else 0, float(linking_length), int(min_size))
+        if n < 0:
+            raise RuntimeError("inline halo finder failed")
+        P = self._lib.enzomodules_session_halo_property
+        halos = []
+        for i in range(n):
+            halos.append({
+                "n":                int(P(i, 0)),
+                "mass":             P(i, 1),
+                "center":           (P(i, 2), P(i, 3), P(i, 4)),
+                "velocity":         (P(i, 5), P(i, 6), P(i, 7)),
+                "vrms":             P(i, 8),
+                "spin":             P(i, 9),
+                "virial_mass":      P(i, 10),
+                "virial_radius":    P(i, 11),
+                "angular_momentum": (P(i, 12), P(i, 13), P(i, 14)),
+            })
+        return halos
+
+    def subhalo_count(self) -> int:
+        """Total number of SUBFIND subgroups from the most recent
+        ``find_halos(subfind=True)`` (0 if SUBFIND was not run)."""
+        return self._lib.enzomodules_session_subhalo_count()
 
     # --- AMR conservation machinery (for a multi-level EvolveLevel) --------
     def num_grids_on_level(self, level: int) -> int:
