@@ -62,8 +62,10 @@ Make.mach.claire-linux
 run/test_output/
 # EnzoModules build artifacts (shared libraries are built locally / in CI)
 EnzoModules/deps/*.so
+EnzoModules/deps/*.dylib
 EnzoModules/deps/*.o
 src/enzo/libenzo_*.so
+src/enzo/libenzo_*.dylib
 EnzoModules/**/__pycache__/
 EnzoModules/.pytest_cache/
 EnzoModules/**/*.pyc
