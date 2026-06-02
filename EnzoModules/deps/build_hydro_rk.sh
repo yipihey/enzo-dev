@@ -50,10 +50,11 @@ defines="$(cd "${enzo_src}" && make -s show-flags 2>/dev/null | sed -n 's/^DEFIN
 [ -n "${defines}" ] || { echo "ERROR: could not read Enzo DEFINES"; exit 1; }
 
 CXX="${CXX:-g++}"
+src_dir="$(cd "${here}/../src" && pwd)"   # our bridge sources (Enzo headers via -I)
 echo "[build_hydro_rk] CXX enzomodules_hydro_rk_bridge.C"
 ${CXX} ${defines} -I"${enzo_src}" -I"${enzo_src}/hydro_rk" \
     -I/usr/include/hdf5/serial -fPIC -O2 \
-    -c "${enzo_src}/enzomodules_hydro_rk_bridge.C" -o "${here}/hrk_bridge.o"
+    -c "${src_dir}/enzomodules_hydro_rk_bridge.C" -o "${here}/hrk_bridge.o"
 
 echo "[build_hydro_rk] LD ${out}"
 ${CXX} -shared -fPIC -o "${out}" "${here}/hrk_bridge.o" \

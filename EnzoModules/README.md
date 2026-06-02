@@ -23,15 +23,20 @@ rewrite can reuse them.
 
 ```
 EnzoModules/
+  src/                    # our C-ABI bridge + grid-fixture sources (all "ours")
+    enzomodules_bridge.{h,C}        #   extern "C" shims over the Fortran kernels
+    enzomodules_*_bridge.C          #   grid / problem / radiation / halo / ... bridges
+    Grid_EnzoModulesFixture.C       #   grid-class fixture methods
   enzomodules/            # the importable package
     bridge.py             #   ctypes loader + precision check + raw bindings
+    problems.py           #   Session / Problem drivers (full step loop in Python)
     diff.py               #   Tolerance / isclose / compare
     fixtures.py           #   read/write the .fixture format
     hydro.py              #   ergonomic kernel wrappers (twoshock, ppm_sweep_1d, ...)
     examples/             #   worked examples built on the certified kernels
       riemann.py          #     exact Riemann solver (analytic truth)
       ppm_sod.py          #     full 1D PPM hydro driver (Sod shock tube)
-  deps/build_pilot.sh     # builds libenzomodules_pilot.so (bridge + kernel closure)
+  deps/build_*.sh         # build the .so libraries (compile src/ against the Enzo headers)
   fixtures/Hydro/*/*.fixture          # golden inputs/outputs (committed)
   tools/capture_*.py      # capture + validate fixtures
   tools/demo_sod.py       # run the Sod tube and compare to exact
@@ -39,11 +44,12 @@ EnzoModules/
   docs/WRAPPING.md        # how to wrap & certify a new kernel (start here to contribute)
 ```
 
-The C side is two files in the Enzo tree:
-`src/enzo/enzomodules_bridge.{h,C}` — thin `extern "C"` shims that forward to
-the existing Fortran kernels (nothing numerical is reimplemented). This
-follows the libyt integration pattern (`ExposeHierarchyToLibyt.C`): a narrow
-C ABI over the in-tree implementation.
+The C side lives entirely under `EnzoModules/src/` (kept out of the Enzo source
+tree so a normal `make enzo` is untouched and upstream stays pristine).
+`EnzoModules/src/enzomodules_bridge.{h,C}` are thin `extern "C"` shims that
+forward to the existing Fortran kernels (nothing numerical is reimplemented),
+following the libyt integration pattern (`ExposeHierarchyToLibyt.C`): a narrow C
+ABI over the in-tree implementation, compiled against Enzo's headers via `-I`.
 
 ## Quick start
 
@@ -83,7 +89,7 @@ step-by-step recipe to add your own):
 The Fortran-kernel examples above build a tiny standalone library.  The Enzo
 C++ solvers (`hydro_rk`, ZEUS) instead depend on Enzo's headers and global
 state, so they are wrapped by linking against the **full Enzo shared
-library**.  A second bridge (`src/enzo/enzomodules_hydro_rk_bridge.C`) and
+library**.  A second bridge (`EnzoModules/src/enzomodules_hydro_rk_bridge.C`) and
 library (`libenzomodules_hydrork.so`) cover this:
 
 ```bash
@@ -116,7 +122,7 @@ the `grid` class (below).
 ZEUS is a `grid::` *method* — it reads a fully constructed `grid` object, not
 plain arrays.  Wrapping it (and any other grid-method solver) is done with a
 small, generic set of methods added to the `grid` class
-(`src/enzo/Grid_EnzoModulesFixture.C`, declared in `Grid.h` next to the libyt
+(`EnzoModules/src/Grid_EnzoModulesFixture.C`, declared in `Grid.h` next to the libyt
 hooks):
 
 | method | purpose |
@@ -126,7 +132,7 @@ hooks):
 | `EnzoModulesSetupParticles(n, nattr)` + position/velocity/mass setters | a **full grid** with particles |
 | `EnzoModulesDepositParticles` / `GetDepositField` | run CIC particle-mesh deposit and read it back |
 
-The grid bridge (`src/enzo/enzomodules_grid_bridge.C`) seeds globals with
+The grid bridge (`EnzoModules/src/enzomodules_grid_bridge.C`) seeds globals with
 Enzo's own `SetDefaultGlobalValues`, builds a fixture, calls the method, and
 reads the result back.  Certified on this infrastructure so far:
 

@@ -66,7 +66,8 @@ for f in "${FKERNELS[@]}"; do
 done
 
 echo "[build_pilot] CXX enzomodules_bridge.C"
-"${CXX}" ${CXXFLAGS} -c "${enzo_src}/enzomodules_bridge.C" -o "${work}/bridge.o"
+src_dir="$(cd "${here}/../src" && pwd)"   # our bridge source (Enzo headers via -I)
+"${CXX}" ${CXXFLAGS} -c "${src_dir}/enzomodules_bridge.C" -o "${work}/bridge.o"
 objs+=("${work}/bridge.o")
 
 echo "[build_pilot] LD  ${out}"

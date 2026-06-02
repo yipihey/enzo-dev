@@ -26,7 +26,7 @@ subroutine foo(...)  →  extern "C" enzomodules_foo  →   bridge.foo_raw (ctyp
                                           tests/test_foo.py  (replay + physics)
 ```
 
-### 1. Add the C-ABI shim — `src/enzo/enzomodules_bridge.{h,C}`
+### 1. Add the C-ABI shim — `EnzoModules/src/enzomodules_bridge.{h,C}`
 
 Declare a Fortran prototype (all args by reference) and a thin `extern "C"`
 shim that forwards to it via `EM_FORTRAN_NAME` (the trailing-underscore
@@ -140,7 +140,7 @@ functions** that read a constructed `grid` (`BaryonField`, `GridDimension`,
 `GridStartIndex`, boundary state) plus globals. The generic **grid-fixture
 infrastructure** handles the grid construction so you don't have to:
 
-`src/enzo/Grid_EnzoModulesFixture.C` adds these methods to the `grid` class
+`EnzoModules/src/Grid_EnzoModulesFixture.C` adds these methods to the `grid` class
 (declared in `Grid.h` next to the libyt hooks; adding non-virtual methods does
 not change object layout, so they link against a prebuilt `libenzo`):
 
