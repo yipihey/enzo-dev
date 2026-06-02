@@ -140,7 +140,7 @@ functions** that read a constructed `grid` (`BaryonField`, `GridDimension`,
 `GridStartIndex`, boundary state) plus globals. The generic **grid-fixture
 infrastructure** handles the grid construction so you don't have to:
 
-`EnzoModules/src/Grid_EnzoModulesFixture.C` adds these methods to the `grid` class
+`src/enzo/Grid_EnzoModulesFixture.C` adds these methods to the `grid` class
 (declared in `Grid.h` next to the libyt hooks; adding non-virtual methods does
 not change object layout, so they link against a prebuilt `libenzo`):
 

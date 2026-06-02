@@ -23,10 +23,9 @@ rewrite can reuse them.
 
 ```
 EnzoModules/
-  src/                    # our C-ABI bridge + grid-fixture sources (all "ours")
+  src/                    # our C-ABI bridge sources (the standalone "ours")
     enzomodules_bridge.{h,C}        #   extern "C" shims over the Fortran kernels
     enzomodules_*_bridge.C          #   grid / problem / radiation / halo / ... bridges
-    Grid_EnzoModulesFixture.C       #   grid-class fixture methods
   enzomodules/            # the importable package
     bridge.py             #   ctypes loader + precision check + raw bindings
     problems.py           #   Session / Problem drivers (full step loop in Python)
@@ -42,14 +41,20 @@ EnzoModules/
   tools/demo_sod.py       # run the Sod tube and compare to exact
   tests/                  # pytest replay + physics suite
   docs/WRAPPING.md        # how to wrap & certify a new kernel (start here to contribute)
+
+src/enzo/                 # upstream Enzo tree -- the one file we add here:
+  Grid_EnzoModulesFixture.C         #   grid-class fixture methods (declared in Grid.h)
 ```
 
-The C side lives entirely under `EnzoModules/src/` (kept out of the Enzo source
-tree so a normal `make enzo` is untouched and upstream stays pristine).
-`EnzoModules/src/enzomodules_bridge.{h,C}` are thin `extern "C"` shims that
-forward to the existing Fortran kernels (nothing numerical is reimplemented),
-following the libyt integration pattern (`ExposeHierarchyToLibyt.C`): a narrow C
-ABI over the in-tree implementation, compiled against Enzo's headers via `-I`.
+The standalone C bridges live under `EnzoModules/src/` (kept out of the Enzo
+source tree so a normal `make enzo` is untouched and upstream stays pristine).
+The lone exception is `Grid_EnzoModulesFixture.C`: it adds methods to Enzo's
+`grid` class and is declared in `src/enzo/Grid.h`, so it sits beside the class it
+extends.  `EnzoModules/src/enzomodules_bridge.{h,C}` are thin `extern "C"` shims
+that forward to the existing Fortran kernels (nothing numerical is
+reimplemented), following the libyt integration pattern
+(`ExposeHierarchyToLibyt.C`): a narrow C ABI over the in-tree implementation,
+compiled against Enzo's headers via `-I`.
 
 ## Quick start
 
@@ -122,7 +127,7 @@ the `grid` class (below).
 ZEUS is a `grid::` *method* — it reads a fully constructed `grid` object, not
 plain arrays.  Wrapping it (and any other grid-method solver) is done with a
 small, generic set of methods added to the `grid` class
-(`EnzoModules/src/Grid_EnzoModulesFixture.C`, declared in `Grid.h` next to the libyt
+(`src/enzo/Grid_EnzoModulesFixture.C`, declared in `Grid.h` next to the libyt
 hooks):
 
 | method | purpose |

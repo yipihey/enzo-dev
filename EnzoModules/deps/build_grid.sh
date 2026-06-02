@@ -48,8 +48,14 @@ src_dir="$(cd "${here}/../src" && pwd)"
 inc="-I${enzo_src} -I${enzo_src}/hydro_rk -I/usr/include/hdf5/serial"
 
 for src in Grid_EnzoModulesFixture enzomodules_grid_bridge enzomodules_problem_bridge enzomodules_chemistry_bridge enzomodules_radiation_bridge enzomodules_ppm_grid_bridge enzomodules_timing_init enzomodules_amr_bridge enzomodules_mhdct_bridge enzomodules_hierarchy_bridge enzomodules_halo_bridge; do
+  # The grid-fixture is a grid-class extension declared in Enzo's Grid.h, so it
+  # lives in src/enzo; the bridges live under EnzoModules/src.
+  case "${src}" in
+    Grid_EnzoModulesFixture) from="${enzo_src}" ;;
+    *)                       from="${src_dir}"  ;;
+  esac
   echo "[build_grid] CXX ${src}.C"
-  ${CXX} ${defines} ${inc} -fPIC -O2 -c "${src_dir}/${src}.C" -o "${here}/${src}.o"
+  ${CXX} ${defines} ${inc} -fPIC -O2 -c "${from}/${src}.C" -o "${here}/${src}.o"
 done
 
 echo "[build_grid] LD ${out}"
