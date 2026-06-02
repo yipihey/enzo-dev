@@ -1,0 +1,85 @@
+{
+  "grids": [
+    {
+      "dims": [
+        70,
+        70,
+        1
+      ],
+      "fields": [
+        {
+          "dims": [
+            70,
+            70,
+            1
+          ],
+          "name": "Density",
+          "stats": {
+            "count": 4900,
+            "max": 2.0,
+            "mean": 1.45714285714,
+            "min": 1.0,
+            "sum": 7140.0
+          },
+          "type": 0
+        },
+        {
+          "dims": [
+            70,
+            70,
+            1
+          ],
+          "name": "TotalEnergy",
+          "stats": {
+            "count": 4900,
+            "max": 6.3799519632,
+            "mean": 4.90704497065,
+            "min": 3.2500480368,
+            "sum": 24044.5203562
+          },
+          "type": 1
+        },
+        {
+          "dims": [
+            70,
+            70,
+            1
+          ],
+          "name": "Velocity1",
+          "stats": {
+            "count": 4900,
+            "max": 0.5,
+            "mean": -0.0428571428571,
+            "min": -0.5,
+            "sum": -210.0
+          },
+          "type": 4
+        },
+        {
+          "dims": [
+            70,
+            70,
+            1
+          ],
+          "name": "Velocity2",
+          "stats": {
+            "count": 4900,
+            "max": 0.0995184726672,
+            "mean": -3.15790477668e-18,
+            "min": -0.0995184726672,
+            "sum": -1.54737334057e-14
+          },
+          "type": 5
+        }
+      ],
+      "index": 0,
+      "num_particles": 0,
+      "rank": 2
+    }
+  ],
+  "name": "KelvinHelmholtz",
+  "num_grids": 1,
+  "paramfile": "run/Hydro/Hydro-2D/KelvinHelmholtz/KelvinHelmholtz.enzo",
+  "problem_type": 8,
+  "schema": 1
+}

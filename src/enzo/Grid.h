@@ -2844,7 +2844,50 @@ int zEulerSweep(int j, int NumberOfSubgrids, fluxes *SubgridFluxes[],
 #endif
 #ifdef USE_LIBYT
     void ConvertToLibyt(int LocalGridID, int GlobalGridID, int ParentID, int level, yt_grid &GridInfo);
-#endif 
+#endif
+
+//------------------------------------------------------------------------
+// EnzoModules unit-test fixture support (see EnzoModules/).
+//   Build a minimal, self-contained grid from flat arrays so a single grid::
+//   solver method can be exercised in isolation, and copy fields back out.
+//   These are the generic primitives the EnzoModules grid bridge uses to wrap
+//   any grid-method solver (ZEUS, radiation transfer, gravity, ...).
+//------------------------------------------------------------------------
+    int  EnzoModulesSetupGrid(int rank, int dims[], FLOAT left[], FLOAT right[],
+                              int num_fields, int field_types[], double dt);
+    void EnzoModulesSetField(int field_index, const double *data);
+    void EnzoModulesGetField(int field_index, double *data);
+    int  EnzoModulesFieldIndex(int field_type);
+    int  EnzoModulesGridSize();
+    // AMR: copy the refinement FlaggingField in / out (int per cell).
+    void EnzoModulesSetFlagging(const int *data);
+    void EnzoModulesGetFlagging(int *data);
+    // MHD constrained transport: face-centered B + discrete divergence.
+    void EnzoModulesSetMagneticField(int dim, const double *data);
+    int  EnzoModulesMagneticSize(int dim);
+    double EnzoModulesMaxDivB();
+    // Particles (full-grid support for particle-mesh / deposit tests).
+    int  EnzoModulesSetupParticles(int n, int num_attributes);
+    void EnzoModulesSetParticlePosition(int dim, const double *data);
+    void EnzoModulesSetParticleVelocity(int dim, const double *data);
+    void EnzoModulesSetParticleMass(const double *data);
+    void EnzoModulesGetParticlePosition(int dim, double *data);
+    // CIC deposit of the grid's own particles -> GravitatingMassFieldParticles.
+    int    EnzoModulesDepositParticles();   // returns deposited-field cell count
+    void   EnzoModulesGetDepositField(double *data);
+    double EnzoModulesDepositCellVolume();
+    // Radiative transfer: fire one photon package through this grid and return
+    // its surviving photons / path length (for Beer-Lambert verification).
+    int    EnzoModulesRaytrace(double energy, double photons, double dtphoton,
+                               double lightspeed, int ipix, int hpix_level,
+                               double *photons_final, double *radius_final,
+                               double *kph_sum);
+    // Multi-grid photon transport: hand a ray from this grid into a sibling.
+    int    EnzoModulesRaytraceTwoGrid(grid *gB, double energy, double photons,
+                                      double dtphoton, double lightspeed,
+                                      int ipix, int hpix_level,
+                                      double *photons_final, double *radius_final,
+                                      int *grids_visited);
 //------------------------------------------------------------------------
 // Methods for star formation
 //------------------------------------------------------------------------

@@ -1,0 +1,25 @@
+# EnzoModules fixture
+kernel = twoshock
+name = symmetric
+idim = 1
+jdim = 1
+i1 = 1
+i2 = 1
+j1 = 1
+j2 = 1
+ipresfree = 0
+gravity = 0
+idual = 0
+dt = 0.0
+gamma = 1.4
+pmin = 1e-20
+eta1 = 0.0
+@dls 2.0
+@drs 2.0
+@pls 3.0
+@prs 3.0
+@uls 0.0
+@urs 0.0
+@grslice 0.0
+@pbar 3.0
+@ubar 0.0

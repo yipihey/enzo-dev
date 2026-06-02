@@ -1,0 +1,100 @@
+# Fast, hermetic unit tests for the extracted legacy Enzo kernels.
+#
+# This is intentionally independent of the main CircleCI regression suite:
+# it builds only the small EnzoModules pilot shared library (a handful of
+# leaf Fortran kernels + the C-ABI bridge -- no HDF5/MPI/full Enzo) and runs
+# the Python replay tests against the checked-in golden fixtures.  It gives
+# sub-minute feedback on whether the wrapped kernels still reproduce their
+# captured reference outputs.
+name: EnzoModules unit tests
+
+on:
+  push:
+    paths:
+      - "EnzoModules/**"
+      - "src/enzo/enzomodules_bridge.*"
+      - "src/enzo/*.F"
+      - ".github/workflows/enzomodules.yml"
+  pull_request:
+    paths:
+      - "EnzoModules/**"
+      - "src/enzo/enzomodules_bridge.*"
+      - "src/enzo/*.F"
+      - ".github/workflows/enzomodules.yml"
+  workflow_dispatch:
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: EnzoModules
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gfortran g++
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install test deps
+        run: python -m pip install --upgrade pip pytest
+
+      - name: Build pilot library
+        run: ./deps/build_pilot.sh
+
+      - name: Capture-and-validate fixtures (against exact/analytic solutions)
+        # Regenerates fixtures and fails if a kernel drifts from the analytic
+        # reference (twoshock star-state; PPM Sod L1 error).
+        run: |
+          python tools/capture_twoshock.py
+          python tools/capture_ppm_sweep.py
+
+      - name: Fail if fixtures drifted
+        # The committed fixtures must match a fresh capture bit-for-bit.
+        run: git diff --exit-code -- fixtures/
+
+      - name: Run replay + physics tests (Fortran-kernel pilot only)
+        run: python -m pytest -q --ignore=tests/test_hydro_rk.py --ignore=tests/test_zeus.py
+
+      - name: Demo (Sod vs exact Riemann)
+        run: python tools/demo_sod.py
+
+  # Heavier job: the hydro_rk / Dedner-MHD and ZEUS solvers link against the
+  # full Enzo shared library, so this builds Enzo serially (HDF5, no MPI) once
+  # and then both C++ bridges before testing.
+  cxx_solvers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain + HDF5
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gfortran g++ libhdf5-dev zlib1g-dev
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install test deps
+        run: python -m pip install --upgrade pip pytest
+
+      - name: Build Enzo shared library + hydro_rk bridge
+        run: ./EnzoModules/deps/build_hydro_rk.sh
+
+      - name: Build grid-method bridge (reuses the Enzo library)
+        run: ./EnzoModules/deps/build_grid.sh
+
+      - name: Run all C++-solver tests (hydro_rk, MHD, ZEUS, particles, radiation, gravity)
+        working-directory: EnzoModules
+        run: |
+          python -m pytest -q \
+            tests/test_hydro_rk.py tests/test_zeus.py \
+            tests/test_particles.py tests/test_radiation.py \
+            tests/test_gravity.py tests/test_problems.py tests/test_ppm_hydro.py \
+            tests/test_problem_fixtures.py tests/test_chemistry.py tests/test_amr.py tests/test_mhdct.py tests/test_hierarchy.py tests/test_evolve.py \
+            tests/test_session.py
