@@ -344,6 +344,67 @@ def test_session_evolve_photons_noop_without_rt():
         assert all(v > 0 for v in s.grid(0).field("Density"))
 
 
+def test_session_solve_cooling():
+    """The radiative-cooling + chemistry sub-step (grid::MultiSpeciesHandler)
+    runs on the live hierarchy: after heating/ionizing the gas with a few RT
+    steps, repeated solve_cooling (no further heating) monotonically lowers the
+    total energy and evolves the species -- real, certified cooling/chemistry,
+    not just a callable no-op."""
+    import enzomodules.problems as P
+    with problems.Session(_photontest()) as s:
+        g = s.grid(0)
+        with P._suppress_fd_output():
+            for _ in range(5):                       # heat + ionize
+                s.set_boundary(0)
+                s.set_dt(0, s.compute_dt(0))
+                s.evolve_photons(0)
+                s.advance_time(0)
+            hii_before = sum(g.field("HIIDensity"))
+            s.set_dt(0, s.compute_dt(0))
+            energies = []
+            for _ in range(5):                       # cool only
+                s.solve_cooling(0)
+                energies.append(sum(g.field("TotalEnergy")))
+            hii_after = sum(g.field("HIIDensity"))
+        assert all(b < a for a, b in zip(energies, energies[1:])), energies
+        assert hii_after != hii_before               # chemistry advanced
+
+
+def test_session_solve_cooling_noop():
+    """Hardening: solve_cooling is a clean no-op on a problem with cooling and
+    chemistry off (Toro-1), leaving the hydro state intact."""
+    import enzomodules.problems as P
+    with problems.Session(_toro1()) as s:
+        rho0 = list(s.grid(0).field("Density"))
+        with P._suppress_fd_output():
+            s.set_boundary(0)
+            s.set_dt(0, s.compute_dt(0))
+            s.solve_cooling(0)                       # no-op, no change
+        assert list(s.grid(0).field("Density")) == rho0
+
+
+def test_session_init_failure_is_graceful(tmp_path):
+    """Hardening: a problem whose initialization throws (ENZO_FAIL, e.g. a
+    missing cooling-rate data file) raises a Python error instead of aborting
+    the host process."""
+    path = _param("Cooling/CoolingTest_JHW/CoolingTest_JHW.enzo")
+    if not os.path.exists(path):
+        pytest.skip("CoolingTest_JHW parameter file missing")
+    # Run from a clean directory WITHOUT the rate-data files so init fails.
+    import enzomodules.problems as P
+    cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        with pytest.raises(RuntimeError):
+            with P._suppress_fd_output():
+                problems.Session(path)
+    finally:
+        os.chdir(cwd)
+    # the process survived -- a normal session still initializes fine
+    with problems.Session(_toro1()) as s:
+        assert s.grid(0).size > 0
+
+
 def test_session_radiation_hydro_coupled():
     """The recursive Python EvolveLevel with radiation=True drives a coupled
     radiation-hydrodynamics AMR problem (PhotonTestAMR: hydro + RT + AMR),

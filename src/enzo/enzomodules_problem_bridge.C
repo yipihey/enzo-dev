@@ -292,7 +292,15 @@ void *enzomodules_session_init(const char *paramfile)
 #endif
 
   char *fname = strdup(paramfile);
-  int rc = InitializeNew(fname, p->TopGrid, p->MetaData, p->Exterior, &p->dt);
+  int rc;
+  /* InitializeNew throws EnzoFatalException (ENZO_FAIL) on many setup errors --
+   * e.g. a missing/unparseable cooling-rate data file.  Catch it so a failed
+   * problem init returns NULL gracefully instead of aborting the host process. */
+  try {
+    rc = InitializeNew(fname, p->TopGrid, p->MetaData, p->Exterior, &p->dt);
+  } catch (EnzoFatalException &e) {
+    rc = FAIL;
+  }
   if (rc == FAIL) { free(fname); delete p; return NULL; }
 
   p->MetaData.dtDataDump = 0.0;
@@ -511,6 +519,24 @@ int enzomodules_session_solve_hydro(void *h, int level)
     if (Grids[i]->GridData->SolveHydroEquations(p->MetaData.CycleNumber, ns,
                                                 sf, level) == FAIL) rc = 1;
   }
+  delete[] Grids;
+  return rc;
+}
+
+/* Solve the radiative cooling + non-equilibrium species rate equations on
+ * `level` (grid::MultiSpeciesHandler) -- the separate cooling/chemistry sub-step
+ * EvolveLevel runs after the hydro solve.  Dispatches to Grackle, the coupled
+ * rate-and-cool solver, or SolveRateEquations + SolveRadiativeCooling depending
+ * on the run's settings.  A clean no-op (returns 0) when both MultiSpecies and
+ * RadiativeCooling are off.  Call after solve_hydro(level). */
+int enzomodules_session_solve_cooling(void *h, int level)
+{
+  EMProblem *p = (EMProblem *)h;
+  HierarchyEntry **Grids;
+  int n = GenerateGridArray(p->LevelArray, level, &Grids);
+  int rc = 0;
+  for (int i = 0; i < n; i++)
+    if (Grids[i]->GridData->MultiSpeciesHandler() == FAIL) rc = 1;
   delete[] Grids;
   return rc;
 }

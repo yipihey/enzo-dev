@@ -318,9 +318,10 @@ with Session("run/Hydro/Hydro-2D/ImplosionAMR/ImplosionAMR.enzo") as s:
 ```
 
 `evolve_level` / `run_amr` take `gravity=True` (run the self-gravity chain each
-step), `radiation=True` (emit + transport photons each step) and
-`star_sources=True` (radiate from star particles), so the same Python driver
-does gravitating, radiation-hydrodynamic AMR runs.
+step), `radiation=True` (emit + transport photons each step),
+`star_sources=True` (radiate from star particles) and `cooling=True` (solve
+radiative cooling + chemistry each step), so the same Python driver does
+gravitating, radiation-hydrodynamic, cooling AMR runs.
 
 `tests/test_session.py` runs this on the 4-level `ImplosionAMR` problem — the
 recursion, sub-cycling, flux correction, projection and regridding all fire (the
@@ -357,6 +358,24 @@ clamped to SUBFIND's neighbour requirement so a small value can't abort the run.
 grow with the linking length, SUBFIND resolves subgroups in the big clump,
 particle count is conserved across repeated calls, and the hydro still advances
 afterwards.
+
+#### Radiative cooling + non-equilibrium chemistry
+
+`Session.solve_cooling(level)` runs `grid::MultiSpeciesHandler` — the
+cooling/chemistry sub-step `EvolveLevel` runs after the hydro solve (it is a
+*separate* step, not part of `solve_hydro`).  It dispatches to Grackle, the
+coupled rate-and-cool solver, or `SolveRateEquations` + `SolveRadiativeCooling`
+per the run's settings, and is a clean no-op when both `MultiSpecies` and
+`RadiativeCooling` are off.  `tests/test_session.py` heats/ionizes the
+`PhotonTest` gas with a few RT steps, then shows repeated `solve_cooling` (no
+further heating) **monotonically lowers the total energy and evolves the
+species** — real cooling/chemistry on the live hierarchy, not a callable no-op.
+
+This was the top P0 gap in `docs/COVERAGE_AUDIT.md`; with it, the Python driver
+can run a cooling, radiation-hydrodynamic, gravitating AMR step.  Wiring it also
+hardened `session_init`: a problem whose initialization throws (e.g. a missing
+cooling-rate data file) now raises a Python error instead of aborting the host
+process.
 
 - **Multi-grid (AMR) photon transport** (`bridge.raytrace_twogrid`) — a ray
   crossing two tiled grids (the legacy `SubgridMarker` -> `FindPhotonNewGrid`

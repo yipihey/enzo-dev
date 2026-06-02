@@ -90,9 +90,9 @@ def _lib():
         lib.enzomodules_session_cycle.restype = ctypes.c_int
         lib.enzomodules_session_cycle.argtypes = [ctypes.c_void_p]
         lib.enzomodules_session_compute_dt.argtypes = [ctypes.c_void_p, ctypes.c_int]
-        for fn in ("set_boundary", "solve_hydro", "rebuild", "gravity",
-                   "evolve_photons", "create_fluxes", "update_from_finer",
-                   "finalize_fluxes", "num_grids_on_level"):
+        for fn in ("set_boundary", "solve_hydro", "solve_cooling", "rebuild",
+                   "gravity", "evolve_photons", "create_fluxes",
+                   "update_from_finer", "finalize_fluxes", "num_grids_on_level"):
             f = getattr(lib, "enzomodules_session_" + fn)
             f.restype = ctypes.c_int
             f.argtypes = [ctypes.c_void_p, ctypes.c_int]
@@ -333,6 +333,16 @@ class Session:
         if self._lib.enzomodules_session_solve_hydro(self._h, level):
             raise RuntimeError(f"SolveHydroEquations failed (level {level})")
 
+    def solve_cooling(self, level: int = 0) -> None:
+        """Solve radiative cooling + non-equilibrium species rate equations
+        (grid::MultiSpeciesHandler) -- the cooling/chemistry sub-step EvolveLevel
+        runs after the hydro solve.  Dispatches to Grackle, the coupled
+        rate-and-cool solver, or SolveRateEquations + SolveRadiativeCooling per
+        the run's settings.  No-op unless MultiSpecies or RadiativeCooling is on.
+        Call after solve_hydro(level)."""
+        if self._lib.enzomodules_session_solve_cooling(self._h, level):
+            raise RuntimeError(f"cooling/chemistry solve failed (level {level})")
+
     def advance_time(self, level: int = 0) -> None:
         self._lib.enzomodules_session_advance_time(self._h, level)
 
@@ -449,7 +459,8 @@ class Session:
 
     def evolve_level(self, level: int = 0, dt_above: float = 0.0,
                      gravity: bool = False, regrid: bool = True,
-                     radiation: bool = False, star_sources: bool = False) -> int:
+                     radiation: bool = False, star_sources: bool = False,
+                     cooling: bool = False) -> int:
         """A Python re-implementation of Enzo's recursive EvolveLevel, built
         entirely from the certified session steps.  Mirrors the legacy control
         flow: clear the boundary fluxes once on entry, then sub-cycle this level
@@ -480,6 +491,8 @@ class Session:
                 self.gravity(level)
             self.copy_baryon_to_old(level)
             self.solve_hydro(level)                 # fills the boundary fluxes
+            if cooling:
+                self.solve_cooling(level)           # radiative cooling + chemistry
             self.update_particles(level)
             self.advance_time(level)
 
@@ -489,7 +502,7 @@ class Session:
                 self.set_boundary(level)            # refresh before projection
                 self.evolve_level(level + 1, dt_above=dt, gravity=gravity,
                                   regrid=regrid, radiation=radiation,
-                                  star_sources=star_sources)
+                                  star_sources=star_sources, cooling=cooling)
                 self.update_from_finer(level)       # project + flux-correct
             self.finalize_fluxes(level)
 
@@ -503,21 +516,23 @@ class Session:
 
     def run_amr(self, gravity: bool = False, regrid: bool = True,
                 radiation: bool = False, star_sources: bool = False,
-                max_cycles: int = 100000) -> int:
+                cooling: bool = False, max_cycles: int = 100000) -> int:
         """Top-level driver mirroring EvolveHierarchy: an initial regrid, then
         repeatedly evolve the whole hierarchy one root step (``evolve_level(0)``)
         and regrid, until StopTime.  Pass ``gravity=True`` to include the
         self-gravity chain, ``radiation=True`` to emit + transport photons each
-        step, and ``star_sources=True`` to radiate from star particles.  This is
-        a complete (optionally radiation-hydrodynamic + gravitating) AMR run
-        driven from Python on top of the certified legacy steps."""
+        step, ``star_sources=True`` to radiate from star particles, and
+        ``cooling=True`` to solve radiative cooling + chemistry each step.  This
+        is a complete (optionally radiation-hydrodynamic + gravitating + cooling)
+        AMR run driven from Python on top of the certified legacy steps."""
         n = 0
         with _suppress_fd_output():
             if regrid:
                 self.rebuild(0)
             while self.time < self.stop_time and n < max_cycles:
                 self.evolve_level(0, gravity=gravity, regrid=regrid,
-                                  radiation=radiation, star_sources=star_sources)
+                                  radiation=radiation, star_sources=star_sources,
+                                  cooling=cooling)
                 if regrid:
                     self.rebuild(0)
                 n += 1
