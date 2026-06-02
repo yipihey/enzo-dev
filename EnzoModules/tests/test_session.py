@@ -183,6 +183,41 @@ def test_session_mhd_rk_runs():
         assert abs(sum(rho) - mass0) < 1e-6 * mass0          # mass conserved
 
 
+def test_session_cosmology_expansion():
+    """The cosmology accessor (CosmologyComputeExpansionFactor) reports the scale
+    factor / redshift on a comoving run, and (1, 0) on a non-comoving one."""
+    path = _param("Cosmology/SphericalInfall/SphericalInfall.enzo")
+    if not os.path.exists(path):
+        pytest.skip("SphericalInfall parameter file missing")
+    with problems.Session(path) as s:
+        a, z = s.cosmology()
+        # Enzo normalizes a = 1 at the initial redshift (here z = 99).
+        assert abs(a - 1.0) < 1e-6
+        assert abs(z - 99.0) < 1e-3
+        assert s.scale_factor == a and s.redshift == z
+    # non-cosmological problem -> (1, 0)
+    with problems.Session(_toro1()) as s:
+        assert s.cosmology() == (1.0, 0.0)
+
+
+def test_session_physics_steps_noop():
+    """Hardening: the optional per-step physics modules (active particles, UV
+    background, turbulence forcing, conduction, shock finding) are clean no-ops
+    on a plain hydro problem with that physics off, leaving the state intact."""
+    import enzomodules.problems as P
+    with problems.Session(_toro1()) as s:
+        rho0 = list(s.grid(0).field("Density"))
+        with P._suppress_fd_output():
+            s.set_boundary(0)
+            s.set_dt(0, s.compute_dt(0))
+            s.active_particles(0)
+            s.update_radiation_field(0)
+            s.random_forcing(0)
+            s.conduct_heat(0)
+            s.find_shocks(0)
+        assert list(s.grid(0).field("Density")) == rho0
+
+
 def test_session_gravity_chain_runs():
     """The self-gravity chain (deposit + Poisson solve + accelerations) runs on
     the live hierarchy of a self-gravitating problem."""

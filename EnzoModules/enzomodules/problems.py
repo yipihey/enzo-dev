@@ -88,6 +88,11 @@ def _lib():
             ctypes.c_void_p, ctypes.c_int, ctypes.c_int]
         lib.enzomodules_session_from_output.restype = ctypes.c_void_p
         lib.enzomodules_session_from_output.argtypes = [ctypes.c_char_p]
+        # Cosmology expansion accessor.
+        lib.enzomodules_session_cosmology.restype = ctypes.c_int
+        lib.enzomodules_session_cosmology.argtypes = [
+            ctypes.c_void_p, ctypes.POINTER(ctypes.c_double),
+            ctypes.POINTER(ctypes.c_double)]
         for fn in ("time", "stop_time", "compute_dt"):
             f = getattr(lib, "enzomodules_session_" + fn)
             f.restype = ctypes.c_double
@@ -97,7 +102,9 @@ def _lib():
         lib.enzomodules_session_cycle.argtypes = [ctypes.c_void_p]
         lib.enzomodules_session_compute_dt.argtypes = [ctypes.c_void_p, ctypes.c_int]
         for fn in ("set_boundary", "solve_hydro", "solve_cooling",
-                   "star_particles", "rebuild", "gravity", "evolve_photons",
+                   "star_particles", "active_particles",
+                   "update_radiation_field", "random_forcing", "conduct_heat",
+                   "find_shocks", "rebuild", "gravity", "evolve_photons",
                    "create_fluxes", "update_from_finer", "finalize_fluxes",
                    "num_grids_on_level"):
             f = getattr(lib, "enzomodules_session_" + fn)
@@ -366,6 +373,59 @@ class Session:
         finer than that lifetime."""
         if self._lib.enzomodules_session_star_particles(self._h, level):
             raise RuntimeError(f"star-particle lifecycle failed (level {level})")
+
+    def active_particles(self, level: int = 0) -> None:
+        """Run the active-particle lifecycle on `level` (the modern sink /
+        SmartStar / accretion framework): ActiveParticleInitialize -> per-grid
+        ActiveParticleHandler -> ActiveParticleFinalize.  No-op unless active
+        particles are enabled."""
+        if self._lib.enzomodules_session_active_particles(self._h, level):
+            raise RuntimeError(f"active-particle lifecycle failed (level {level})")
+
+    def update_radiation_field(self, level: int = 0) -> None:
+        """Recompute the homogeneous radiation background (RadiationFieldUpdate)
+        -- the UV background field.  No-op unless a RadiationFieldType is on."""
+        if self._lib.enzomodules_session_update_radiation_field(self._h, level):
+            raise RuntimeError(f"RadiationFieldUpdate failed (level {level})")
+
+    def random_forcing(self, level: int = 0) -> None:
+        """Turbulence driving: normalize the random forcing and (when
+        DrivenFlowProfile is set) compute the stochastic force field.  Call
+        before solve_hydro so the forcing enters the momentum update."""
+        if self._lib.enzomodules_session_random_forcing(self._h, level):
+            raise RuntimeError(f"random forcing failed (level {level})")
+
+    def conduct_heat(self, level: int = 0) -> None:
+        """Apply thermal conduction (Grid::ConductHeat) on `level`.  No-op unless
+        Isotropic/AnisotropicConduction is on."""
+        if self._lib.enzomodules_session_conduct_heat(self._h, level):
+            raise RuntimeError(f"thermal conduction failed (level {level})")
+
+    def find_shocks(self, level: int = 0) -> None:
+        """Run shock finding (Grid::ShocksHandler) on `level`.  No-op unless
+        ShockMethod is on."""
+        if self._lib.enzomodules_session_find_shocks(self._h, level):
+            raise RuntimeError(f"shock finding failed (level {level})")
+
+    def cosmology(self) -> tuple:
+        """Return ``(scale_factor, redshift)`` at the current time
+        (CosmologyComputeExpansionFactor).  ``(1.0, 0.0)`` for a non-cosmological
+        run."""
+        a = ctypes.c_double(0.0)
+        z = ctypes.c_double(0.0)
+        self._lib.enzomodules_session_cosmology(
+            self._h, ctypes.byref(a), ctypes.byref(z))
+        return (a.value, z.value)
+
+    @property
+    def scale_factor(self) -> float:
+        """Cosmological scale factor a at the current time (1.0 if non-comoving)."""
+        return self.cosmology()[0]
+
+    @property
+    def redshift(self) -> float:
+        """Cosmological redshift z at the current time (0.0 if non-comoving)."""
+        return self.cosmology()[1]
 
     def advance_time(self, level: int = 0) -> None:
         self._lib.enzomodules_session_advance_time(self._h, level)

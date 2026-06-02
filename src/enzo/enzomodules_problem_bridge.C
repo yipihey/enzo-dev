@@ -24,6 +24,7 @@
 #include "macros_and_parameters.h"
 #include "typedefs.h"
 #include "global_data.h"
+#include "CosmologyParameters.h"
 #include "Fluxes.h"
 #include "GridList.h"
 #include "ExternalBoundary.h"
@@ -106,6 +107,20 @@ int StarParticleFinalize(HierarchyEntry *Grids[], TopGridData *MetaData,
 int ComputeDednerWaveSpeeds(TopGridData *MetaData,
                             LevelHierarchyEntry *LevelArray[], int level,
                             double dt0);
+int ActiveParticleInitialize(HierarchyEntry *Grids[], TopGridData *MetaData,
+                             int NumberOfGrids, LevelHierarchyEntry *LevelArray[],
+                             int ThisLevel);
+int ActiveParticleFinalize(HierarchyEntry *Grids[], TopGridData *MetaData,
+                           int NumberOfGrids, LevelHierarchyEntry *LevelArray[],
+                           int level, int NumberOfNewActiveParticles[]);
+int CosmologyComputeExpansionFactor(FLOAT time, FLOAT *a, FLOAT *dadt);
+int RadiationFieldUpdate(LevelHierarchyEntry *LevelArray[], int level,
+                         TopGridData *MetaData);
+int ComputeRandomForcingNormalization(LevelHierarchyEntry *LevelArray[],
+                                      int level, TopGridData *MetaData,
+                                      float *norm, float *pTopGridTimeStep);
+int ComputeStochasticForcing(TopGridData *MetaData, HierarchyEntry *Grids[],
+                             int NumberOfGrids);
 int EvolveHierarchy(HierarchyEntry &TopGrid, TopGridData &MetaData,
                     ExternalBoundary *Exterior,
 #ifdef TRANSFER
@@ -774,6 +789,107 @@ int enzomodules_session_star_particles(void *h, int level)
   /* Formation/feedback may have created particles and redistributed them. */
   em_recollect(p);
   return rc;
+}
+
+/* Active-particle lifecycle on `level` (the modern sink / SmartStar / accretion
+ * framework): ActiveParticleInitialize -> per-grid ActiveParticleHandler ->
+ * ActiveParticleFinalize.  No-op unless active particles are enabled. */
+int enzomodules_session_active_particles(void *h, int level)
+{
+  EMProblem *p = (EMProblem *)h;
+  HierarchyEntry **Grids;
+  int n = GenerateGridArray(p->LevelArray, level, &Grids);
+  if (n == 0) { delete[] Grids; return 0; }
+
+  int *NumNew = new int[n];
+  for (int i = 0; i < n; i++) NumNew[i] = 0;
+  float dt = Grids[0]->GridData->ReturnTimeStep();
+
+  int rc = 0;
+  if (ActiveParticleInitialize(Grids, &p->MetaData, n, p->LevelArray,
+                               level) == FAIL) rc = 1;
+  for (int i = 0; i < n; i++)
+    if (Grids[i]->GridData->ActiveParticleHandler(Grids[i]->NextGridNextLevel,
+                                                  level, dt, NumNew[i]) == FAIL)
+      rc = 1;
+  if (ActiveParticleFinalize(Grids, &p->MetaData, n, p->LevelArray, level,
+                             NumNew) == FAIL) rc = 1;
+  delete[] NumNew;
+  delete[] Grids;
+  em_recollect(p);
+  return rc;
+}
+
+/* Recompute the homogeneous radiation background (RadiationFieldUpdate) on
+ * `level` -- the UV background / Haardt-Madau-style field.  No-op unless a
+ * RadiationFieldType is active. */
+int enzomodules_session_update_radiation_field(void *h, int level)
+{
+  EMProblem *p = (EMProblem *)h;
+  return (RadiationFieldUpdate(p->LevelArray, level, &p->MetaData) == FAIL)
+         ? 1 : 0;
+}
+
+/* Turbulence driving: normalize the random forcing (top grid) and, when
+ * DrivenFlowProfile is set, compute the stochastic force field via FFT.  Run
+ * before solve_hydro so the forcing enters the momentum update. */
+int enzomodules_session_random_forcing(void *h, int level)
+{
+  EMProblem *p = (EMProblem *)h;
+  HierarchyEntry **Grids;
+  int n = GenerateGridArray(p->LevelArray, level, &Grids);
+  float norm = 0.0, topdt = (n > 0) ? Grids[0]->GridData->ReturnTimeStep() : 0.0;
+  int rc = 0;
+  if (ComputeRandomForcingNormalization(p->LevelArray, 0, &p->MetaData,
+                                        &norm, &topdt) == FAIL) rc = 1;
+  if (DrivenFlowProfile)
+    if (ComputeStochasticForcing(&p->MetaData, Grids, n) == FAIL) rc = 1;
+  delete[] Grids;
+  return rc;
+}
+
+/* Per-grid physics steps EvolveLevel runs after the hydro solve: thermal
+ * conduction (ConductHeat) and shock finding (ShocksHandler).  No-ops unless the
+ * corresponding physics is enabled. */
+int enzomodules_session_conduct_heat(void *h, int level)
+{
+  EMProblem *p = (EMProblem *)h;
+  HierarchyEntry **Grids;
+  int n = GenerateGridArray(p->LevelArray, level, &Grids);
+  int rc = 0;
+  for (int i = 0; i < n; i++)
+    if (Grids[i]->GridData->ConductHeat() == FAIL) rc = 1;
+  delete[] Grids;
+  return rc;
+}
+
+int enzomodules_session_find_shocks(void *h, int level)
+{
+  EMProblem *p = (EMProblem *)h;
+  HierarchyEntry **Grids;
+  int n = GenerateGridArray(p->LevelArray, level, &Grids);
+  int rc = 0;
+  for (int i = 0; i < n; i++)
+    if (Grids[i]->GridData->ShocksHandler() == FAIL) rc = 1;
+  delete[] Grids;
+  return rc;
+}
+
+/* Cosmology accessors: compute the expansion factor at the current time.
+ * Writes the scale factor a (normalized to 1 at the initial redshift) and the
+ * redshift z.  Returns 1 if comoving coordinates are off (a=1, z=0). */
+int enzomodules_session_cosmology(void *h, double *a_out, double *z_out)
+{
+  EMProblem *p = (EMProblem *)h;
+  if (!ComovingCoordinates) { if (a_out) *a_out = 1.0;
+                              if (z_out) *z_out = 0.0; return 1; }
+  FLOAT a = 1.0, dadt = 0.0;
+  CosmologyComputeExpansionFactor(p->MetaData.Time, &a, &dadt);
+  if (a_out) *a_out = (double)a;
+  /* a is in units of (1+InitialRedshift)^-1 ... i.e. a=1 at InitialRedshift, so
+   * 1+z = (1+InitialRedshift)/a. */
+  if (z_out) *z_out = (double)((1.0 + InitialRedshift) / a - 1.0);
+  return 0;
 }
 
 /* Allocate the per-level boundary-flux storage (one entry per subgrid) that
