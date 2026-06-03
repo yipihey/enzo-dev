@@ -679,6 +679,40 @@ int enzomodules_session_comoving_expansion(void *h, int level)
   return rc;
 }
 
+/* CT-MHD (UseMHDCT): allocate + zero the per-grid AvgElectricField accumulator.
+ * EvolveLevel.C:377 does this for level>0 grids at level entry; the subgrid's
+ * SolveHydroEquations sums its electric field into it, and the parent's
+ * UpdateFromFinerGrids/MHD_ProjectFace reads it (null without this -> segfault).
+ * ClearAvgElectricField is itself a no-op when UseMHDCT is off. */
+int enzomodules_session_clear_avg_electric_field(void *h, int level)
+{
+  EMProblem *p = (EMProblem *)h;
+  HierarchyEntry **Grids;
+  int n = GenerateGridArray(p->LevelArray, level, &Grids);
+  int rc = 0;
+  for (int i = 0; i < n; i++)
+    if (Grids[i]->GridData->ClearAvgElectricField() == FAIL) rc = 1;
+  delete[] Grids;
+  return rc;
+}
+
+/* CT-MHD: after UpdateFromFinerGrids, recompute the cell-centered B from the
+ * face-corrected magnetic field using the averaged electric field from finer
+ * grids (the CT analog of flux refluxing) -- EvolveLevel.C:899-901, guarded by
+ * UseMHDCT && MHD_ProjectE. NextLevel = LevelArray[level+1]. */
+int enzomodules_session_mhd_update_magnetic_field(void *h, int level)
+{
+  EMProblem *p = (EMProblem *)h;
+  HierarchyEntry **Grids;
+  int n = GenerateGridArray(p->LevelArray, level, &Grids);
+  int rc = 0;
+  for (int i = 0; i < n; i++)
+    if (Grids[i]->GridData->MHD_UpdateMagneticField(level, p->LevelArray[level+1],
+                                                    FALSE) == FAIL) rc = 1;
+  delete[] Grids;
+  return rc;
+}
+
 int enzomodules_session_solve_hydro(void *h, int level)
 {
   EMProblem *p = (EMProblem *)h;
