@@ -663,6 +663,22 @@ void enzomodules_session_set_dt(void *h, int level, double dt)
  *    speeds computed up front for MHD_RK.  (The optional RK2 gravity re-deposit
  *    EvolveLevel does for self-gravitating RK runs is omitted; call gravity()
  *    around solve_hydro for that case.) */
+/* Apply the comoving expansion (Hubble drag) source terms on a level's grids.
+ * In EvolveLevel this runs once per grid after advance_time when
+ * ComovingCoordinates is on (EvolveLevel.C); the step-by-step session loop must
+ * call it too for cosmology runs, since it is NOT part of SolveHydroEquations. */
+int enzomodules_session_comoving_expansion(void *h, int level)
+{
+  EMProblem *p = (EMProblem *)h;
+  HierarchyEntry **Grids;
+  int n = GenerateGridArray(p->LevelArray, level, &Grids);
+  int rc = 0;
+  for (int i = 0; i < n; i++)
+    if (Grids[i]->GridData->ComovingExpansionTerms() == FAIL) rc = 1;
+  delete[] Grids;
+  return rc;
+}
+
 int enzomodules_session_solve_hydro(void *h, int level)
 {
   EMProblem *p = (EMProblem *)h;
