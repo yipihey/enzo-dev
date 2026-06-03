@@ -247,6 +247,28 @@ void *enzomodules_evolve_problem(const char *paramfile, double stop_time,
 int enzomodules_problem_problemtype(void *)       { return ProblemType; }
 int enzomodules_problem_num_grids(void *h)         { return (int)((EMProblem *)h)->grids.size(); }
 
+/* The refinement level of grid `gi` (0 = root), or -1 if not in the hierarchy.
+ * EMProblem->grids and LevelArray reference the same grid objects (both via
+ * collect_grids over the hierarchy), so a per-level pointer-membership scan
+ * recovers the level — the enabling primitive for a :julia hydro slot to iterate
+ * the grids on a given level under AMR. */
+int enzomodules_problem_grid_level(void *h, int gi)
+{
+  EMProblem *p = (EMProblem *)h;
+  grid *target = p->grids[gi];
+  for (int level = 0; level < MAX_DEPTH_OF_HIERARCHY; level++) {
+    HierarchyEntry **Grids;
+    int n = GenerateGridArray(p->LevelArray, level, &Grids);
+    int found = -1;
+    for (int i = 0; i < n; i++)
+      if (Grids[i]->GridData == target) { found = level; break; }
+    delete[] Grids;
+    if (found >= 0) return found;
+    if (n == 0) break;                 /* no grids at this level ⇒ none deeper */
+  }
+  return -1;
+}
+
 int enzomodules_problem_grid_rank(void *h, int gi)
 { return ((EMProblem *)h)->grids[gi]->GetGridRank(); }
 
