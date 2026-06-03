@@ -2859,6 +2859,12 @@ int zEulerSweep(int j, int NumberOfSubgrids, fluxes *SubgridFluxes[],
     void EnzoModulesGetField(int field_index, double *data);
     int  EnzoModulesFieldIndex(int field_type);
     int  EnzoModulesGridSize();
+    // Self-gravity: write/read the cell-centered AccelerationField[dim] that
+    // SolveHydroEquations reads as the gravity source — lets a :julia gravity
+    // method feed an :enzo hydro. Set allocates if needed (ComputeAccelerations
+    // normally does).
+    void EnzoModulesSetAcceleration(int dim, const double *data);
+    void EnzoModulesGetAcceleration(int dim, double *data);
     // AMR: copy the refinement FlaggingField in / out (int per cell).
     void EnzoModulesSetFlagging(const int *data);
     void EnzoModulesGetFlagging(int *data);

@@ -88,6 +88,25 @@ void grid::EnzoModulesGetField(int field_index, double *data)
     data[i] = (double)BaryonField[field_index][i];
 }
 
+/* Write the cell-centered AccelerationField[dim] (the gravity source that
+ * SolveHydroEquations reads). Allocates the array if it does not exist, since a
+ * :julia gravity slot replaces ComputeAccelerations (which normally allocates). */
+void grid::EnzoModulesSetAcceleration(int dim, const double *data)
+{
+  int size = this->EnzoModulesGridSize();
+  if (AccelerationField[dim] == NULL)
+    AccelerationField[dim] = new float[size];
+  for (int i = 0; i < size; i++)
+    AccelerationField[dim][i] = (float)data[i];
+}
+
+void grid::EnzoModulesGetAcceleration(int dim, double *data)
+{
+  int size = this->EnzoModulesGridSize();
+  for (int i = 0; i < size; i++)
+    data[i] = (AccelerationField[dim] == NULL) ? 0.0 : (double)AccelerationField[dim][i];
+}
+
 int grid::EnzoModulesFieldIndex(int field_type)
 {
   return FindField(field_type, FieldType, NumberOfBaryonFields);

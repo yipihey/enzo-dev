@@ -274,6 +274,14 @@ void enzomodules_problem_get_field(void *h, int gi, int fi, double *out)
 void enzomodules_problem_set_field(void *h, int gi, int fi, const double *in)
 { ((EMProblem *)h)->grids[gi]->EnzoModulesSetField(fi, in); }
 
+/* Self-gravity coupling: write/read the cell-centered AccelerationField[dim], so a
+ * :julia gravity slot can compute g = -grad(phi) and feed Enzo's SolveHydroEquations. */
+void enzomodules_problem_set_acceleration(void *h, int gi, int dim, const double *in)
+{ ((EMProblem *)h)->grids[gi]->EnzoModulesSetAcceleration(dim, in); }
+
+void enzomodules_problem_get_acceleration(void *h, int gi, int dim, double *out)
+{ ((EMProblem *)h)->grids[gi]->EnzoModulesGetAcceleration(dim, out); }
+
 int enzomodules_problem_num_particles(void *h, int gi)
 { return ((EMProblem *)h)->grids[gi]->ReturnNumberOfParticles(); }
 
