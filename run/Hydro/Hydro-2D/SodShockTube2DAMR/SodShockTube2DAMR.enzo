@@ -1,0 +1,45 @@
+#
+# PROBLEM DEFINITION FILE: Sod Shock Tube, 2D AMR variant
+#
+# A planar (x-direction) Sod shock tube on a 2D grid. The initial discontinuity
+# is a strip refined at start (RefineAtStart), so the coarse–fine boundary is a
+# genuine 2D face plane (its y-faces are interior coarse–fine interfaces). The
+# y-state is uniform, so per-row this is the mild 1D Sod that EnzoNG's :julia
+# hydro conserves to round-off — exactly the vehicle the ND face-plane reflux
+# raster needs (1D analog: ../../Hydro-1D/SodShockTube/SodShockTubeAMR.enzo).
+#
+ProblemType            = 1
+TopGridRank            = 2
+TopGridDimensions      = 60 60
+
+HydroMethod            = 0
+
+StopTime               = 0.25
+dtDataDump             = 1.0
+DataDumpName           = data
+
+# transmissive (outflow) on all faces — waves stay interior over the test window
+LeftFaceBoundaryCondition    = 1 1 1
+RightFaceBoundaryCondition   = 1 1 1
+
+Gamma                  = 1.4
+CourantSafetyNumber    = 0.8
+
+#  AMR: refine the initial discontinuity into a static interior strip
+StaticHierarchy           = 0
+MaximumRefinementLevel    = 2
+RefineBy                  = 2
+CellFlaggingMethod        = 1
+MinimumSlopeForRefinement = 0.2
+
+#  the (x-direction) Sod shock tube
+HydroShockTubesRefineAtStart         = 1
+HydroShockTubesInitialDiscontinuity  = 0.5
+HydroShockTubesLeftDensity           = 1.0
+HydroShockTubesLeftVelocityX         = 0.0
+HydroShockTubesLeftVelocityY         = 0.0
+HydroShockTubesLeftPressure          = 1.0
+HydroShockTubesRightDensity          = 0.125
+HydroShockTubesRightVelocityX        = 0.0
+HydroShockTubesRightVelocityY        = 0.0
+HydroShockTubesRightPressure         = 0.1
