@@ -108,6 +108,27 @@ void EM_FORTRAN_NAME(euler)(
     double *gef, double *ges,
     int *ncolor, double *colslice, double *colf, double *dfloor);
 
+void EM_FORTRAN_NAME(pgas2d)(
+    double *dslice, double *eslice, double *pslice,
+    double *uslice, double *vslice, double *wslice,
+    int *idim, int *jdim, int *i1, int *i2, int *j1, int *j2,
+    double *gamma, double *pmin);
+
+void EM_FORTRAN_NAME(pgas2d_dual)(
+    double *dslice, double *eslice, double *geslice, double *pslice,
+    double *uslice, double *vslice, double *wslice,
+    double *eta1, double *eta2,
+    int *idim, int *jdim, int *i1, int *i2, int *j1, int *j2,
+    double *gamma, double *pmin);
+
+void EM_FORTRAN_NAME(calcdiss)(
+    double *dslice, double *eslice, double *uslice, double *v, double *w,
+    double *pslice, double *dx, double *dy, double *dz,
+    int *idim, int *jdim, int *kdim, int *i1, int *i2, int *j1, int *j2,
+    int *k, int *nzz, int *idir, int *dimx, int *dimy, int *dimz,
+    double *dt, double *gamma, int *idiff, int *iflatten,
+    double *diffcoef, double *flatten);
+
 int enzomodules_baryon_precision_bytes(void) { return EM_R_BYTES; }
 int enzomodules_int_precision_bytes(void)    { return EM_I_BYTES; }
 
@@ -206,6 +227,236 @@ int enzomodules_ppm_sweep_1d(
       df.data(), ef.data(), uf.data(), vf.data(), wf.data(),
       gef.data(), ges.data(),
       &ncolor, colslice.data(), colf.data(), &dfloor);
+
+  if (df_out) std::memcpy(df_out, df.data(), n * sizeof(double));
+  if (ef_out) std::memcpy(ef_out, ef.data(), n * sizeof(double));
+  if (uf_out) std::memcpy(uf_out, uf.data(), n * sizeof(double));
+  return 0;
+}
+
+/* ================================================================== *
+ *  Leaf-kernel wrappers (one extern "C" shim per Fortran kernel).
+ *
+ *  These expose each PPM stage individually so a port can be certified
+ *  component-by-component against the same Fortran reference, with every
+ *  production feature (dual energy, gravity, colour, flattening/diffusion)
+ *  plumbed as a *parameter* instead of hard-coded off.  Arrays are
+ *  caller-allocated column-major (idim x jdim) slabs; in/out semantics
+ *  match the underlying Fortran routine.
+ * ================================================================== */
+
+/* pgas2d: gas pressure from total energy (EOS). */
+void enzomodules_pgas2d(
+    double *dslice, double *eslice, double *pslice,
+    double *uslice, double *vslice, double *wslice,
+    int idim, int jdim, int i1, int i2, int j1, int j2,
+    double gamma, double pmin)
+{
+  EM_FORTRAN_NAME(pgas2d)(
+      dslice, eslice, pslice, uslice, vslice, wslice,
+      &idim, &jdim, &i1, &i2, &j1, &j2, &gamma, &pmin);
+}
+
+/* pgas2d_dual: gas pressure under the dual-energy formalism. */
+void enzomodules_pgas2d_dual(
+    double *dslice, double *eslice, double *geslice, double *pslice,
+    double *uslice, double *vslice, double *wslice,
+    double eta1, double eta2,
+    int idim, int jdim, int i1, int i2, int j1, int j2,
+    double gamma, double pmin)
+{
+  EM_FORTRAN_NAME(pgas2d_dual)(
+      dslice, eslice, geslice, pslice, uslice, vslice, wslice,
+      &eta1, &eta2, &idim, &jdim, &i1, &i2, &j1, &j2, &gamma, &pmin);
+}
+
+/* calcdiss: diffusion coefficient + flattening for one slice. */
+void enzomodules_calcdiss(
+    double *dslice, double *eslice, double *uslice, double *v, double *w,
+    double *pslice, double *dx, double *dy, double *dz,
+    int idim, int jdim, int kdim, int i1, int i2, int j1, int j2,
+    int k, int nzz, int idir, int dimx, int dimy, int dimz,
+    double dt, double gamma, int idiff, int iflatten,
+    double *diffcoef, double *flatten)
+{
+  EM_FORTRAN_NAME(calcdiss)(
+      dslice, eslice, uslice, v, w, pslice, dx, dy, dz,
+      &idim, &jdim, &kdim, &i1, &i2, &j1, &j2, &k, &nzz, &idir,
+      &dimx, &dimy, &dimz, &dt, &gamma, &idiff, &iflatten,
+      diffcoef, flatten);
+}
+
+/* inteuler: PPM parabolic reconstruction -> left/right interface states. */
+void enzomodules_inteuler(
+    double *dslice, double *pslice, int gravity, double *grslice,
+    double *geslice, double *uslice, double *vslice, double *wslice,
+    double *dxi, double *flatten,
+    int idim, int jdim, int i1, int i2, int j1, int j2,
+    int idual, double eta1, double eta2,
+    int isteep, int iflatten, int iconsrec, int iposrec,
+    double dt, double gamma, int ipresfree,
+    double *dls, double *drs, double *pls, double *prs,
+    double *gels, double *gers, double *uls, double *urs,
+    double *vls, double *vrs, double *wls, double *wrs,
+    int ncolor, double *colslice, double *colls, double *colrs)
+{
+  EM_FORTRAN_NAME(inteuler)(
+      dslice, pslice, &gravity, grslice, geslice, uslice, vslice, wslice,
+      dxi, flatten, &idim, &jdim, &i1, &i2, &j1, &j2,
+      &idual, &eta1, &eta2, &isteep, &iflatten, &iconsrec, &iposrec,
+      &dt, &gamma, &ipresfree,
+      dls, drs, pls, prs, gels, gers, uls, urs, vls, vrs, wls, wrs,
+      &ncolor, colslice, colls, colrs);
+}
+
+/* flux_twoshock: Eulerian fluxes from the resolved interface states. */
+void enzomodules_flux_twoshock(
+    double *dslice, double *eslice, double *geslice,
+    double *uslice, double *vslice, double *wslice,
+    double *dx, double *diffcoef,
+    int idim, int jdim, int i1, int i2, int j1, int j2,
+    double dt, double gamma, int idiff, int idual, double eta1,
+    int ifallback,
+    double *dls, double *drs, double *pls, double *prs,
+    double *gels, double *gers, double *uls, double *urs,
+    double *vls, double *vrs, double *wls, double *wrs,
+    double *pbar, double *ubar,
+    double *df, double *ef, double *uf, double *vf, double *wf,
+    double *gef, double *ges,
+    int ncolor, double *colslice, double *colls, double *colrs, double *colf)
+{
+  EM_FORTRAN_NAME(flux_twoshock)(
+      dslice, eslice, geslice, uslice, vslice, wslice, dx, diffcoef,
+      &idim, &jdim, &i1, &i2, &j1, &j2, &dt, &gamma, &idiff, &idual, &eta1,
+      &ifallback, dls, drs, pls, prs, gels, gers, uls, urs, vls, vrs, wls, wrs,
+      pbar, ubar, df, ef, uf, vf, wf, gef, ges,
+      &ncolor, colslice, colls, colrs, colf);
+}
+
+/* euler: conservative flux-divergence update of the zone-centred state. */
+void enzomodules_euler(
+    double *dslice, double *eslice, double *grslice, double *geslice,
+    double *uslice, double *vslice, double *wslice,
+    double *dx, double *diffcoef,
+    int idim, int jdim, int i1, int i2, int j1, int j2,
+    double dt, double gamma, int idiff, int gravity,
+    int idual, double eta1, double eta2,
+    double *df, double *ef, double *uf, double *vf, double *wf,
+    double *gef, double *ges,
+    int ncolor, double *colslice, double *colf, double dfloor)
+{
+  EM_FORTRAN_NAME(euler)(
+      dslice, eslice, grslice, geslice, uslice, vslice, wslice, dx, diffcoef,
+      &idim, &jdim, &i1, &i2, &j1, &j2, &dt, &gamma, &idiff, &gravity,
+      &idual, &eta1, &eta2, df, ef, uf, vf, wf, gef, ges,
+      &ncolor, colslice, colf, &dfloor);
+}
+
+/* ------------------------------------------------------------------ *
+ *  enzomodules_ppm_sweep_1d_full
+ *
+ *  The full production directional sweep: same inteuler -> twoshock ->
+ *  flux_twoshock -> euler chain as enzomodules_ppm_sweep_1d, but with the
+ *  dual-energy formalism, gravity, colour advection, slope flattening and
+ *  artificial diffusion exposed as parameters.  This is the golden
+ *  reference the composed Metal/KA sweep is certified against.
+ *
+ *  Extra in/out arrays vs the basic sweep:
+ *    geslice  : specific gas energy (in/out; updated when idual != 0)
+ *    grslice  : gravitational acceleration (in; used when gravity != 0)
+ *    colslice : colour fields, column-major (idim x ncolor) (in/out)
+ *  When iflatten/idiff != 0 the flattening + diffusion coefficients are
+ *  computed by calcdiss for this slice (idir = 1, 1-D geometry).
+ * ------------------------------------------------------------------ */
+int enzomodules_ppm_sweep_1d_full(
+    double *dslice, double *eslice, double *geslice,
+    double *uslice, double *vslice, double *wslice, double *pslice,
+    int idim, int i1, int i2, double dx, double dt, double gamma,
+    int gravity, double *grslice,
+    int idual, double eta1, double eta2,
+    int isteep, int iflatten, int iconsrec, int iposrec,
+    int idiff, int ipresfree, int ifallback,
+    double pmin, double dfloor,
+    int ncolor, double *colslice,
+    double *df_out, double *ef_out, double *uf_out)
+{
+  const int jdim = 1, j1 = 1, j2 = 1;
+  const int n  = idim * jdim;
+  const int nc = (ncolor > 0) ? n * ncolor : n;   /* colour scratch length */
+  const int ie_p1 = i2 + 1;
+
+  std::vector<double> flatten(n, 0.0), diffcoef(n, 0.0);
+  std::vector<double> dxa(n, dx), dya(1, dx), dza(1, dx);
+  std::vector<double> dls(n, 0.0), drs(n, 0.0), pls(n, 0.0), prs(n, 0.0);
+  std::vector<double> uls(n, 0.0), urs(n, 0.0), vls(n, 0.0), vrs(n, 0.0);
+  std::vector<double> wls(n, 0.0), wrs(n, 0.0), gels(n, 0.0), gers(n, 0.0);
+  std::vector<double> pbar(n, 0.0), ubar(n, 0.0);
+  std::vector<double> df(n, 0.0), ef(n, 0.0), uf(n, 0.0), vf(n, 0.0);
+  std::vector<double> wf(n, 0.0), gef(n, 0.0), ges(n, 0.0);
+  std::vector<double> colls(nc, 0.0), colrs(nc, 0.0), colf(nc, 0.0);
+
+  /* gravity / gas-energy / colour scratch fall back to inert zero buffers
+     when the caller passes NULL (feature disabled). */
+  std::vector<double> grav_z(n, 0.0), ges_z(n, 0.0), col_z(nc, 0.0);
+  double *grav = grslice  ? grslice  : grav_z.data();
+  double *ges_ = geslice  ? geslice  : ges_z.data();
+  double *cols = (ncolor > 0 && colslice) ? colslice : col_z.data();
+
+  /* 0. flattening + diffusion coefficients (1-D: dimy = dimz = 1 gates the
+        multidimensional terms off). */
+  if (iflatten != 0 || idiff != 0) {
+    int kdim = 1, k = 1, nzz = idim, idir = 1, dimx = idim, dimy = 1, dimz = 1;
+    EM_FORTRAN_NAME(calcdiss)(
+        dslice, eslice, uslice, vslice, wslice, pslice,
+        dxa.data(), dya.data(), dza.data(),
+        (int*)&idim, (int*)&jdim, &kdim, &i1, &i2, (int*)&j1, (int*)&j2,
+        &k, &nzz, &idir, &dimx, &dimy, &dimz,
+        &dt, &gamma, &idiff, &iflatten, diffcoef.data(), flatten.data());
+  }
+
+  /* 1. PPM reconstruction. */
+  EM_FORTRAN_NAME(inteuler)(
+      dslice, pslice, &gravity, grav, ges_, uslice, vslice, wslice,
+      dxa.data(), flatten.data(),
+      (int*)&idim, (int*)&jdim, &i1, &i2, (int*)&j1, (int*)&j2,
+      &idual, &eta1, &eta2, &isteep, &iflatten, &iconsrec, &iposrec,
+      &dt, &gamma, &ipresfree,
+      dls.data(), drs.data(), pls.data(), prs.data(),
+      gels.data(), gers.data(), uls.data(), urs.data(),
+      vls.data(), vrs.data(), wls.data(), wrs.data(),
+      &ncolor, cols, colls.data(), colrs.data());
+
+  /* 2. Two-shock Riemann problem at each interface. */
+  EM_FORTRAN_NAME(twoshock)(
+      dls.data(), drs.data(), pls.data(), prs.data(),
+      uls.data(), urs.data(),
+      (int*)&idim, (int*)&jdim, &i1, (int*)&ie_p1, (int*)&j1, (int*)&j2,
+      &dt, &gamma, &pmin, &ipresfree,
+      pbar.data(), ubar.data(), &gravity, grav, &idual, &eta1);
+
+  /* 3. Eulerian fluxes. */
+  EM_FORTRAN_NAME(flux_twoshock)(
+      dslice, eslice, ges_, uslice, vslice, wslice,
+      dxa.data(), diffcoef.data(),
+      (int*)&idim, (int*)&jdim, &i1, &i2, (int*)&j1, (int*)&j2,
+      &dt, &gamma, &idiff, &idual, &eta1, &ifallback,
+      dls.data(), drs.data(), pls.data(), prs.data(),
+      gels.data(), gers.data(), uls.data(), urs.data(),
+      vls.data(), vrs.data(), wls.data(), wrs.data(),
+      pbar.data(), ubar.data(),
+      df.data(), ef.data(), uf.data(), vf.data(), wf.data(),
+      gef.data(), ges.data(),
+      &ncolor, cols, colls.data(), colrs.data(), colf.data());
+
+  /* 4. Conservative update (in place). */
+  EM_FORTRAN_NAME(euler)(
+      dslice, eslice, grav, ges_, uslice, vslice, wslice,
+      dxa.data(), diffcoef.data(),
+      (int*)&idim, (int*)&jdim, &i1, &i2, (int*)&j1, (int*)&j2,
+      &dt, &gamma, &idiff, &gravity, &idual, &eta1, &eta2,
+      df.data(), ef.data(), uf.data(), vf.data(), wf.data(),
+      gef.data(), ges.data(),
+      &ncolor, cols, colf.data(), &dfloor);
 
   if (df_out) std::memcpy(df_out, df.data(), n * sizeof(double));
   if (ef_out) std::memcpy(ef_out, ef.data(), n * sizeof(double));

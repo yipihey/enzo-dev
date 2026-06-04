@@ -48,6 +48,11 @@ FKERNELS=(
   "flux_twoshock.F"
   "flux_hll.F"
   "euler.F"
+  # Component-level kernels exposed for per-stage certification + the full
+  # production sweep (EOS, dual-energy EOS, diffusion/flattening):
+  "pgas2d.F"
+  "pgas2d_dual.F"
+  "calcdiss.F"
 )
 # Note: the ERROR_MESSAGE/WARNING_MESSAGE macros in the reconstruction
 # kernels resolve to fc_error/fc_warning, which the bridge provides as light
@@ -71,6 +76,20 @@ src_dir="$(cd "${here}/../src" && pwd)"   # our bridge source (Enzo headers via 
 objs+=("${work}/bridge.o")
 
 echo "[build_pilot] LD  ${out}"
-"${CXX}" -shared -fPIC -o "${out}" "${objs[@]}" -lgfortran
+# libgfortran lives next to the gfortran install, not on the C++ linker's
+# default search path (notably on macOS / Homebrew gcc).  Ask the Fortran
+# compiler where it is and add that dir + an rpath so the link and the runtime
+# load both resolve it.  On Linux the dir is already on the default path, so
+# the extra -L/-rpath are harmless.
+gflib=""
+for cand in libgfortran.dylib libgfortran.so; do
+  p="$("${FC}" -print-file-name="${cand}" 2>/dev/null || true)"
+  if [ -n "${p}" ] && [ "${p}" != "${cand}" ] && [ -e "${p}" ]; then
+    gflib="$(cd "$(dirname "${p}")" && pwd)"; break
+  fi
+done
+LDLIBDIR=()
+[ -n "${gflib}" ] && LDLIBDIR=(-L"${gflib}" -Wl,-rpath,"${gflib}")
+"${CXX}" -shared -fPIC -o "${out}" "${objs[@]}" "${LDLIBDIR[@]}" -lgfortran
 
 echo "[build_pilot] OK"

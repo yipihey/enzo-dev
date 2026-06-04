@@ -92,6 +92,90 @@ int enzomodules_ppm_sweep_1d(
     double dx, double dt, double gamma,
     double *df, double *ef, double *uf);   /* flux outputs, may be NULL */
 
+/* ------------------------------------------------------------------ *
+ *  Individual PPM-stage kernels (component-level certification).
+ *
+ *  One shim per Fortran leaf kernel, with every production feature
+ *  (dual energy via geslice/eta1/eta2, gravity via grslice, colour via
+ *  ncolor/colslice, flattening/diffusion) exposed as a parameter.  Arrays
+ *  are caller-allocated column-major (idim x jdim) slabs; in/out semantics
+ *  follow the underlying routine.  See enzomodules_bridge.C for details.
+ * ------------------------------------------------------------------ */
+void enzomodules_pgas2d(
+    double *dslice, double *eslice, double *pslice,
+    double *uslice, double *vslice, double *wslice,
+    int idim, int jdim, int i1, int i2, int j1, int j2,
+    double gamma, double pmin);
+
+void enzomodules_pgas2d_dual(
+    double *dslice, double *eslice, double *geslice, double *pslice,
+    double *uslice, double *vslice, double *wslice,
+    double eta1, double eta2,
+    int idim, int jdim, int i1, int i2, int j1, int j2,
+    double gamma, double pmin);
+
+void enzomodules_calcdiss(
+    double *dslice, double *eslice, double *uslice, double *v, double *w,
+    double *pslice, double *dx, double *dy, double *dz,
+    int idim, int jdim, int kdim, int i1, int i2, int j1, int j2,
+    int k, int nzz, int idir, int dimx, int dimy, int dimz,
+    double dt, double gamma, int idiff, int iflatten,
+    double *diffcoef, double *flatten);
+
+void enzomodules_inteuler(
+    double *dslice, double *pslice, int gravity, double *grslice,
+    double *geslice, double *uslice, double *vslice, double *wslice,
+    double *dxi, double *flatten,
+    int idim, int jdim, int i1, int i2, int j1, int j2,
+    int idual, double eta1, double eta2,
+    int isteep, int iflatten, int iconsrec, int iposrec,
+    double dt, double gamma, int ipresfree,
+    double *dls, double *drs, double *pls, double *prs,
+    double *gels, double *gers, double *uls, double *urs,
+    double *vls, double *vrs, double *wls, double *wrs,
+    int ncolor, double *colslice, double *colls, double *colrs);
+
+void enzomodules_flux_twoshock(
+    double *dslice, double *eslice, double *geslice,
+    double *uslice, double *vslice, double *wslice,
+    double *dx, double *diffcoef,
+    int idim, int jdim, int i1, int i2, int j1, int j2,
+    double dt, double gamma, int idiff, int idual, double eta1,
+    int ifallback,
+    double *dls, double *drs, double *pls, double *prs,
+    double *gels, double *gers, double *uls, double *urs,
+    double *vls, double *vrs, double *wls, double *wrs,
+    double *pbar, double *ubar,
+    double *df, double *ef, double *uf, double *vf, double *wf,
+    double *gef, double *ges,
+    int ncolor, double *colslice, double *colls, double *colrs, double *colf);
+
+void enzomodules_euler(
+    double *dslice, double *eslice, double *grslice, double *geslice,
+    double *uslice, double *vslice, double *wslice,
+    double *dx, double *diffcoef,
+    int idim, int jdim, int i1, int i2, int j1, int j2,
+    double dt, double gamma, int idiff, int gravity,
+    int idual, double eta1, double eta2,
+    double *df, double *ef, double *uf, double *vf, double *wf,
+    double *gef, double *ges,
+    int ncolor, double *colslice, double *colf, double dfloor);
+
+/* Full production directional sweep (dual energy + gravity + colour +
+   flattening/diffusion as parameters).  geslice/grslice/colslice may be
+   NULL when the corresponding feature is off.  Returns 0 on success. */
+int enzomodules_ppm_sweep_1d_full(
+    double *dslice, double *eslice, double *geslice,
+    double *uslice, double *vslice, double *wslice, double *pslice,
+    int idim, int i1, int i2, double dx, double dt, double gamma,
+    int gravity, double *grslice,
+    int idual, double eta1, double eta2,
+    int isteep, int iflatten, int iconsrec, int iposrec,
+    int idiff, int ipresfree, int ifallback,
+    double pmin, double dfloor,
+    int ncolor, double *colslice,
+    double *df, double *ef, double *uf);
+
 #ifdef __cplusplus
 }
 #endif

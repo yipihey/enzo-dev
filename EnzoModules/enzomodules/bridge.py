@@ -65,6 +65,54 @@ def _load() -> ctypes.CDLL:
             ctypes.c_double, ctypes.c_double, ctypes.c_double,  # dx dt gamma
             d, d, d,                                            # df ef uf (may be NULL)
         ]
+        i, f = ctypes.c_int, ctypes.c_double
+        # ── component-level PPM kernels (full production feature set) ──
+        lib.enzomodules_pgas2d.restype = None
+        lib.enzomodules_pgas2d.argtypes = [
+            d, d, d, d, d, d, i, i, i, i, i, i, f, f]            # d e p u v w idim jdim i1 i2 j1 j2 gamma pmin
+        lib.enzomodules_pgas2d_dual.restype = None
+        lib.enzomodules_pgas2d_dual.argtypes = [
+            d, d, d, d, d, d, d, f, f, i, i, i, i, i, i, f, f]   # d e ge p u v w eta1 eta2 idim jdim i1 i2 j1 j2 gamma pmin
+        lib.enzomodules_calcdiss.restype = None
+        lib.enzomodules_calcdiss.argtypes = [
+            d, d, d, d, d, d, d, d, d,                           # d e u v w p dx dy dz
+            i, i, i, i, i, i, i, i, i, i, i, i, i,               # idim jdim kdim i1 i2 j1 j2 k nzz idir dimx dimy dimz
+            f, f, i, i, d, d]                                    # dt gamma idiff iflatten diffcoef flatten
+        lib.enzomodules_inteuler.restype = None
+        lib.enzomodules_inteuler.argtypes = [
+            d, d, i, d, d, d, d, d, d, d,                        # dslice pslice gravity grslice geslice u v w dxi flatten
+            i, i, i, i, i, i,                                    # idim jdim i1 i2 j1 j2
+            i, f, f, i, i, i, i,                                 # idual eta1 eta2 isteep iflatten iconsrec iposrec
+            f, f, i,                                             # dt gamma ipresfree
+            d, d, d, d, d, d, d, d, d, d, d, d,                  # dls drs pls prs gels gers uls urs vls vrs wls wrs
+            i, d, d, d]                                          # ncolor colslice colls colrs
+        lib.enzomodules_flux_twoshock.restype = None
+        lib.enzomodules_flux_twoshock.argtypes = [
+            d, d, d, d, d, d, d, d,                              # dslice eslice geslice u v w dx diffcoef
+            i, i, i, i, i, i,                                    # idim jdim i1 i2 j1 j2
+            f, f, i, i, f, i,                                    # dt gamma idiff idual eta1 ifallback
+            d, d, d, d, d, d, d, d, d, d, d, d,                  # dls drs pls prs gels gers uls urs vls vrs wls wrs
+            d, d,                                               # pbar ubar
+            d, d, d, d, d, d, d,                                # df ef uf vf wf gef ges
+            i, d, d, d, d]                                      # ncolor colslice colls colrs colf
+        lib.enzomodules_euler.restype = None
+        lib.enzomodules_euler.argtypes = [
+            d, d, d, d, d, d, d, d, d,                           # dslice eslice grslice geslice u v w dx diffcoef
+            i, i, i, i, i, i,                                    # idim jdim i1 i2 j1 j2
+            f, f, i, i, i, f, f,                                 # dt gamma idiff gravity idual eta1 eta2
+            d, d, d, d, d, d, d,                                # df ef uf vf wf gef ges
+            i, d, d, f]                                         # ncolor colslice colf dfloor
+        lib.enzomodules_ppm_sweep_1d_full.restype = ctypes.c_int
+        lib.enzomodules_ppm_sweep_1d_full.argtypes = [
+            d, d, d, d, d, d, d,                                # dslice eslice geslice u v w pslice
+            i, i, i, f, f, f,                                   # idim i1 i2 dx dt gamma
+            i, d,                                               # gravity grslice
+            i, f, f,                                            # idual eta1 eta2
+            i, i, i, i,                                         # isteep iflatten iconsrec iposrec
+            i, i, i,                                            # idiff ipresfree ifallback
+            f, f,                                              # pmin dfloor
+            i, d,                                               # ncolor colslice
+            d, d, d]                                            # df ef uf (may be NULL)
         _lib = lib
     return _lib
 
@@ -782,6 +830,153 @@ def ppm_sweep_1d(dslice, eslice, uslice, vslice, wslice, pslice,
     state = (list(c_d), list(c_e), list(c_u), list(c_v), list(c_w))
     fluxes = (list(c_df), list(c_ef), list(c_uf)) if want_fluxes else None
     return state, fluxes
+
+
+# --------------------------------------------------------------------------
+# Component-level PPM kernels + the full production sweep.
+#
+# These expose each stage of the DirectEuler PPM chain individually, with the
+# dual-energy / gravity / colour / flattening features plumbed as parameters,
+# so a port can be certified one component at a time against the same Fortran
+# reference.  Slabs are length idim*jdim, column-major; colour slabs are
+# length idim*jdim*ncolor.
+# --------------------------------------------------------------------------
+
+
+def pgas2d(dslice, eslice, uslice, vslice, wslice,
+           idim, jdim, i1, i2, j1, j2, gamma, pmin=1e-20):
+    """``enzomodules_pgas2d``: gas pressure from total energy.  Returns ``pslice``."""
+    lib = _load()
+    n = idim * jdim
+    c_p = (ctypes.c_double * n)()
+    lib.enzomodules_pgas2d(_carr(dslice), _carr(eslice), c_p,
+                           _carr(uslice), _carr(vslice), _carr(wslice),
+                           int(idim), int(jdim), int(i1), int(i2), int(j1), int(j2),
+                           float(gamma), float(pmin))
+    return list(c_p)
+
+
+def pgas2d_dual(dslice, eslice, geslice, uslice, vslice, wslice,
+                eta1, eta2, idim, jdim, i1, i2, j1, j2, gamma, pmin=1e-20):
+    """``enzomodules_pgas2d_dual``: dual-energy gas pressure.  Returns ``pslice``."""
+    lib = _load()
+    n = idim * jdim
+    c_p = (ctypes.c_double * n)()
+    lib.enzomodules_pgas2d_dual(_carr(dslice), _carr(eslice), _carr(geslice), c_p,
+                                _carr(uslice), _carr(vslice), _carr(wslice),
+                                float(eta1), float(eta2),
+                                int(idim), int(jdim), int(i1), int(i2), int(j1), int(j2),
+                                float(gamma), float(pmin))
+    return list(c_p)
+
+
+def calcdiss(dslice, eslice, uslice, v, w, pslice, dx, dy, dz,
+             idim, jdim, kdim, i1, i2, j1, j2, k, nzz, idir,
+             dimx, dimy, dimz, dt, gamma, idiff, iflatten):
+    """``enzomodules_calcdiss``: diffusion + flattening for one slice.
+
+    Returns ``(diffcoef, flatten)`` (length ``idim*jdim`` each).  For a 1-D
+    x-sweep use ``idir=1, k=1, kdim=1, dimx=idim, dimy=dimz=1``.
+    """
+    lib = _load()
+    n = idim * jdim
+    c_diff = (ctypes.c_double * n)()
+    c_flat = (ctypes.c_double * n)()
+    lib.enzomodules_calcdiss(
+        _carr(dslice), _carr(eslice), _carr(uslice), _carr(v), _carr(w),
+        _carr(pslice), _carr(dx), _carr(dy), _carr(dz),
+        int(idim), int(jdim), int(kdim), int(i1), int(i2), int(j1), int(j2),
+        int(k), int(nzz), int(idir), int(dimx), int(dimy), int(dimz),
+        float(dt), float(gamma), int(idiff), int(iflatten), c_diff, c_flat)
+    return list(c_diff), list(c_flat)
+
+
+def inteuler(dslice, pslice, grslice, geslice, uslice, vslice, wslice,
+             dxi, flatten, idim, jdim, i1, i2, j1, j2,
+             gravity=0, idual=0, eta1=0.0, eta2=0.0,
+             isteep=0, iflatten=0, iconsrec=0, iposrec=0,
+             dt=0.0, gamma=1.4, ipresfree=0, ncolor=0, colslice=None):
+    """``enzomodules_inteuler``: PPM reconstruction -> left/right interface states.
+
+    Returns a dict of the 12 reconstructed slabs
+    ``{dls,drs,pls,prs,gels,gers,uls,urs,vls,vrs,wls,wrs}`` (plus
+    ``colls``/``colrs`` of length ``idim*jdim*ncolor`` when ``ncolor>0``).
+    """
+    lib = _load()
+    n = idim * jdim
+    nc = n * ncolor if ncolor > 0 else n
+    out = {k: (ctypes.c_double * n)() for k in
+           ("dls", "drs", "pls", "prs", "gels", "gers",
+            "uls", "urs", "vls", "vrs", "wls", "wrs")}
+    c_colls = (ctypes.c_double * nc)()
+    c_colrs = (ctypes.c_double * nc)()
+    c_cols = _carr(colslice) if (ncolor > 0 and colslice is not None) else (ctypes.c_double * nc)()
+    lib.enzomodules_inteuler(
+        _carr(dslice), _carr(pslice), int(gravity), _carr(grslice), _carr(geslice),
+        _carr(uslice), _carr(vslice), _carr(wslice), _carr(dxi), _carr(flatten),
+        int(idim), int(jdim), int(i1), int(i2), int(j1), int(j2),
+        int(idual), float(eta1), float(eta2),
+        int(isteep), int(iflatten), int(iconsrec), int(iposrec),
+        float(dt), float(gamma), int(ipresfree),
+        out["dls"], out["drs"], out["pls"], out["prs"], out["gels"], out["gers"],
+        out["uls"], out["urs"], out["vls"], out["vrs"], out["wls"], out["wrs"],
+        int(ncolor), c_cols, c_colls, c_colrs)
+    res = {k: list(v) for k, v in out.items()}
+    if ncolor > 0:
+        res["colls"] = list(c_colls)
+        res["colrs"] = list(c_colrs)
+    return res
+
+
+def ppm_sweep_1d_full(dslice, eslice, uslice, vslice, wslice, pslice,
+                      i1, i2, dx, dt, gamma, *,
+                      geslice=None, grslice=None, gravity=0,
+                      idual=0, eta1=0.0, eta2=0.0,
+                      isteep=0, iflatten=0, iconsrec=0, iposrec=0,
+                      idiff=0, ipresfree=0, ifallback=0,
+                      pmin=1e-20, dfloor=1e-20,
+                      ncolor=0, colslice=None, want_fluxes=False):
+    """``enzomodules_ppm_sweep_1d_full``: the full production PPM directional
+    sweep with dual energy, gravity, colour and flattening/diffusion.
+
+    Mutating slabs (dslice/eslice/uslice/vslice/wslice, and geslice/colslice when
+    enabled) are updated in place conceptually; this returns fresh lists.  Returns
+    ``(state, geslice_out, colslice_out, fluxes)`` where ``state`` is
+    ``(d, e, u, v, w)``, ``fluxes`` is ``(df, ef, uf)`` or None.
+    """
+    lib = _load()
+    idim = len(dslice)
+    n = idim
+    nc = n * ncolor if ncolor > 0 else n
+    c_d, c_e = _carr(dslice), _carr(eslice)
+    c_u, c_v, c_w = _carr(uslice), _carr(vslice), _carr(wslice)
+    c_p = _carr(pslice)
+    c_ge = _carr(geslice) if geslice is not None else None
+    c_gr = _carr(grslice) if grslice is not None else None
+    c_col = _carr(colslice) if (ncolor > 0 and colslice is not None) else None
+    if want_fluxes:
+        c_df = (ctypes.c_double * n)()
+        c_ef = (ctypes.c_double * n)()
+        c_uf = (ctypes.c_double * n)()
+    else:
+        c_df = c_ef = c_uf = None
+    rc = lib.enzomodules_ppm_sweep_1d_full(
+        c_d, c_e, c_ge, c_u, c_v, c_w, c_p,
+        int(idim), int(i1), int(i2), float(dx), float(dt), float(gamma),
+        int(gravity), c_gr,
+        int(idual), float(eta1), float(eta2),
+        int(isteep), int(iflatten), int(iconsrec), int(iposrec),
+        int(idiff), int(ipresfree), int(ifallback),
+        float(pmin), float(dfloor),
+        int(ncolor), c_col,
+        c_df, c_ef, c_uf)
+    if rc != 0:
+        raise RuntimeError(f"enzomodules_ppm_sweep_1d_full returned {rc}")
+    state = (list(c_d), list(c_e), list(c_u), list(c_v), list(c_w))
+    ge_out = list(c_ge) if c_ge is not None else None
+    col_out = list(c_col) if c_col is not None else None
+    fluxes = (list(c_df), list(c_ef), list(c_uf)) if want_fluxes else None
+    return state, ge_out, col_out, fluxes
 
 
 # --------------------------------------------------------------------------
