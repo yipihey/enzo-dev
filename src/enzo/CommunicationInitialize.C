@@ -50,7 +50,17 @@ int CommunicationInitialize(Eint32 *argc, char **argv[])
   MPI_Arg mpi_size;
   MPI_Comm comm = MPI_COMM_WORLD;
 
-  MPI_Init(argc, argv);
+  /* Allow an external owner (e.g. MPI.jl when Enzo is driven as a library from
+   * Julia) to have already called MPI_Init.  Standalone enzo still inits here.
+   * CommunicationOwnsMPI records who owns the lifecycle so Finalize matches. */
+  int mpi_already = 0;
+  MPI_Initialized(&mpi_already);
+  if (!mpi_already) {
+    MPI_Init(argc, argv);
+    CommunicationOwnsMPI = TRUE;
+  } else {
+    CommunicationOwnsMPI = FALSE;
+  }
   MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank);
   MPI_Comm_size(MPI_COMM_WORLD, &mpi_size);
   MPI_Comm_create_errhandler(CommunicationErrorHandlerFn, &CommunicationErrorHandler);
@@ -98,9 +108,15 @@ int CommunicationFinalize()
  
 #ifdef USE_MPI
   MPI_Errhandler_free(&CommunicationErrorHandler);
-  MPI_Finalize();
+  /* Only finalize if we own the MPI lifecycle.  When an external owner (MPI.jl)
+   * called MPI_Init, it is responsible for MPI_Finalize; finalizing here would
+   * pull MPI out from under it. */
+  int mpi_finalized = 0;
+  MPI_Finalized(&mpi_finalized);
+  if (CommunicationOwnsMPI && !mpi_finalized)
+    MPI_Finalize();
 #endif /* USE_MPI */
- 
+
   return SUCCESS;
 }
 

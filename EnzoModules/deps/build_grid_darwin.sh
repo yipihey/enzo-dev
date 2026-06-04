@@ -1,42 +1,138 @@
 #!/usr/bin/env bash
 # Build libenzomodules_grid (the Session/grid-method bridge) on macOS, linked
-# against the locally-built libenzo_p8_b8.dylib. Darwin counterpart of
-# build_grid.sh (which targets Ubuntu). Run with bash (NOT zsh — needs word-split).
-#   bash EnzoModules/deps/build_grid_darwin.sh
+# against a locally-built libenzo_p8_b8.dylib.  Two flavors:
+#   bash EnzoModules/deps/build_grid_darwin.sh           # serial (default)
+#   bash EnzoModules/deps/build_grid_darwin.sh mpi       # MPI (MPItrampoline)
+#
+# The serial flavor is the default and is byte-compatible with the historical
+# build.  The mpi flavor builds an Enzo compiled with -DUSE_MPI against the
+# MPItrampoline ABI (the project's standard MPI provider: its mpicc/mpicxx must
+# be on PATH; the backend compiler is gcc-15 via MPITRAMPOLINE_{CC,CXX}).  The
+# two flavors coexist: serial libenzo lives in src/enzo/, MPI libenzo in
+# src/enzo/mpi/, and the bridges are libenzomodules_grid{,_mpi}.dylib.
+# Run with bash (NOT zsh — needs word-split).
 set -euo pipefail
+
+FLAVOR="${1:-serial}"
+case "$FLAVOR" in
+  serial|mpi) ;;
+  *) echo "usage: $0 [serial|mpi]"; exit 1 ;;
+esac
+
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 ENZO="$repo/src/enzo"
 GFLIB="$(dirname "$(gfortran -print-file-name=libgfortran.dylib)")"
 HDF5=/opt/homebrew
-OUT="$repo/EnzoModules/deps/libenzomodules_grid.dylib"
+FF="-fallow-argument-mismatch -fno-second-underscore -m64 -ffixed-line-length-132"
+JULIA="${JULIA:-$(command -v julia || echo julia)}"
 
-# ---- stage 1: full Enzo serial shared library (slow; skipped if present) -----
-# macOS specifics vs the stock/Ubuntu build: real Homebrew gcc-15 (Apple clang
-# rejects Enzo's "%"ISYM literals), -ffixed-line-length-132 (fixed-form Fortran),
-# and Homebrew HDF5 (arm64; its H5version.h still provides the v16 API that
-# -DH5_USE_16_API needs).
-libenzo="$(ls "$ENZO"/libenzo_p*_b*.dylib 2>/dev/null | head -1 || true)"
+# ---- flavor-specific knobs ---------------------------------------------------
+if [ "$FLAVOR" = "mpi" ]; then
+  # MPItrampoline is the standard MPI provider.  We compile with gcc-15 directly
+  # against the trampoline ABI (its own mpicc wrapper bakes in build-sandbox
+  # paths, so we don't use it): -I$TRAMP/include and -L$TRAMP/lib -lmpitrampoline.
+  # TRAMP = the MPItrampoline_jll artifact dir (set MPITRAMPOLINE_DIR, or resolve
+  # via the EnzoLib test project's MPIPreferences/MPItrampoline_jll).
+  TRAMP="${MPITRAMPOLINE_DIR:-}"
+  if [ -z "$TRAMP" ]; then
+    TRAMP="$("$JULIA" --project="$repo/EnzoNG.jl/lib/EnzoLib/test" \
+             -e 'import MPItrampoline_jll as T; T.is_available() && print(T.artifact_dir)' 2>/dev/null || true)"
+  fi
+  [ -n "$TRAMP" ] && [ -f "$TRAMP/include/mpi.h" ] || \
+    { echo "ERROR: MPItrampoline artifact not found (set MPITRAMPOLINE_DIR, or configure MPI.jl: MPIPreferences.use_jll_binary(\"MPItrampoline_jll\"))"; exit 1; }
+  echo "[grid] MPItrampoline: $TRAMP"
+  # IMPORTANT: use the HDF5 keg include (no mpi.h) instead of the umbrella
+  # /opt/homebrew/include, whose mpi.h is open-mpi's and would shadow the
+  # MPItrampoline header → undefined `ompi_*` symbols at link.
+  HDF5=/opt/homebrew/opt/hdf5
+  CXX="g++-15"; CC="gcc-15"
+  ENZO_LIBDIR="$ENZO/mpi"
+  OUT="$repo/EnzoModules/deps/libenzomodules_grid_mpi.dylib"
+  MPI_MAKE_TARGET="use-mpi-yes"
+  EXTRA_CONFIG=""    # keep TRANSFER on (parity with serial; fixtures need it)
+  # -fpermissive: the FLD/FSProb radiation solvers pass int where MPItrampoline's
+  # strict MPI_Comm (a pointer) is required — open-mpi's looser typedef hid it.
+  # We don't run those solvers; downgrade the conversion to a warning so the
+  # library still builds with full feature parity.  Core MPI code is strict-clean.
+  #
+  # CRITICAL — embedding: compile against the MPItrampoline headers (-I) but DO NOT
+  # link libmpitrampoline.  The MPI_* symbols are left undefined and resolved at
+  # load time from the host process's already-loaded MPItrampoline (MPI.jl's).
+  # Two reasons NOT to link it / NOT to use a blanket `-undefined dynamic_lookup`:
+  #   (1) linking libmpitrampoline (two-level) loads a 2nd trampoline instance in
+  #       the MPI.jl process → MPItrampoline aborts (forbids double-load);
+  #   (2) a blanket dynamic_lookup also floats libenzo's C++ stdlib symbols, which
+  #       then mis-resolve across C++ runtimes (gcc-15 libstdc++ vs the macOS libc++
+  #       stub) → std::locale double-free abort in static init at dlopen.
+  # So we keep two-level namespace (correct C++) and float ONLY the MPI symbols via
+  # explicit `-Wl,-U` (the exact set Enzo references; a new MPI call would fail the
+  # link with a clear "undefined _MPI_X", prompting an addition here).
+  MPI_USYMS=""
+  for s in MPI_Abort MPI_Allgather MPI_Allgatherv MPI_Allreduce MPI_Alltoall \
+           MPI_Alltoallv MPI_Barrier MPI_Bcast MPI_BYTE MPI_Cancel MPI_CHAR \
+           MPI_Comm_create_errhandler MPI_Comm_rank MPI_Comm_set_errhandler \
+           MPI_Comm_size MPI_COMM_WORLD MPI_DOUBLE MPI_ERR_OTHER MPI_Errhandler_free \
+           MPI_Error_class MPI_Error_string MPI_Finalize MPI_Finalized MPI_FLOAT \
+           MPI_Gather MPI_Init MPI_Initialized MPI_INT MPI_Irecv MPI_Isend \
+           MPI_LONG_DOUBLE MPI_LONG_INT MPI_LONG_LONG_INT MPI_MAX MPI_MIN MPI_PACKED \
+           MPI_PROC_NULL MPI_Recv MPI_Reduce MPI_REQUEST_NULL MPI_Send MPI_Ssend \
+           MPI_STATUS_IGNORE MPI_SUCCESS MPI_SUM MPI_Test MPI_Testsome MPI_Type_commit \
+           MPI_Type_contiguous MPI_Type_size MPI_Wait MPI_Waitall MPI_Waitsome MPI_Wtime; do
+    MPI_USYMS+=" -Wl,-U,_$s"
+  done
+  MACH_OVERRIDES=(MACH_CXX_MPI="$CXX -fpermissive" MACH_CC_MPI="$CC" \
+                  MACH_LD_MPI="$CXX$MPI_USYMS" \
+                  LOCAL_MPI_INSTALL="$TRAMP" LOCAL_LIBS_MPI="")
+  MPI_INC="-I$TRAMP/include"
+  MPI_LINK="$MPI_USYMS"
+else
+  CXX="g++-15"; CC="gcc-15"
+  ENZO_LIBDIR="$ENZO"
+  OUT="$repo/EnzoModules/deps/libenzomodules_grid.dylib"
+  MPI_MAKE_TARGET="use-mpi-no"
+  EXTRA_CONFIG=""
+  MACH_OVERRIDES=(MACH_CXX_NOMPI="$CXX" MACH_CC_NOMPI="$CC" MACH_LD_NOMPI="$CXX")
+  MPI_INC=""; MPI_LINK=""
+fi
+mkdir -p "$ENZO_LIBDIR"
+
+# ---- stage 1: full Enzo shared library (slow; skipped if present) ------------
+# macOS specifics: real Homebrew gcc-15 (Apple clang rejects Enzo's "%"ISYM
+# literals), -ffixed-line-length-132 (fixed-form Fortran), Homebrew HDF5 (arm64;
+# its H5version.h still provides the v16 API that -DH5_USE_16_API needs).
+libenzo="$(ls "$ENZO_LIBDIR"/libenzo_p*_b*.dylib 2>/dev/null | head -1 || true)"
 if [ -z "$libenzo" ]; then
-  echo "[grid] building full Enzo serial library (slow)..."
-  FF="-fallow-argument-mismatch -fno-second-underscore -m64 -ffixed-line-length-132"
+  echo "[grid] building full Enzo $FLAVOR library (slow)..."
   ( cd "$repo" && ./configure )
+  # The serial dylib (if any) lives at $ENZO/libenzo_*.dylib; a mpi build would
+  # clobber that name during `make lib`, so stash and restore it.
+  stash=""
+  if [ "$FLAVOR" = "mpi" ]; then
+    existing="$(ls "$ENZO"/libenzo_p*_b*.dylib 2>/dev/null | head -1 || true)"
+    if [ -n "$existing" ]; then stash="/tmp/$(basename "$existing").serial-stash"; mv "$existing" "$stash"; fi
+  fi
   ( cd "$ENZO"
     make machine-darwin
-    make use-mpi-no precision-64 particles-64 integers-32
+    make "$MPI_MAKE_TARGET" precision-64 particles-64 integers-32 ${EXTRA_CONFIG:+$EXTRA_CONFIG}
     make clean
     LIBRARY_PATH="$GFLIB:${LIBRARY_PATH:-}" make lib -j"$(sysctl -n hw.ncpu)" \
-      MACH_CXX_NOMPI=g++-15 MACH_CC_NOMPI=gcc-15 MACH_LD_NOMPI=g++-15 \
+      "${MACH_OVERRIDES[@]}" \
       MACH_FFLAGS="$FF" MACH_F90FLAGS="$FF" \
       LOCAL_HDF5_INSTALL="$HDF5" LOCAL_FC_INSTALL="$GFLIB" \
       MACH_SHARED_FLAGS=-fPIC SHARED_OPT=-shared )
-  libenzo="$(ls "$ENZO"/libenzo_p*_b*.dylib 2>/dev/null | head -1 || true)"
+  built="$(ls "$ENZO"/libenzo_p*_b*.dylib 2>/dev/null | head -1 || true)"
+  if [ "$FLAVOR" = "mpi" ] && [ -n "$built" ]; then mv "$built" "$ENZO_LIBDIR/"; fi
+  [ -n "$stash" ] && mv "$stash" "$ENZO/$(basename "$stash" .serial-stash)"
+  libenzo="$(ls "$ENZO_LIBDIR"/libenzo_p*_b*.dylib 2>/dev/null | head -1 || true)"
 fi
-[ -n "$libenzo" ] || { echo "ERROR: libenzo not built ($ENZO/libenzo_p*_b*.dylib)"; exit 1; }
+[ -n "$libenzo" ] || { echo "ERROR: libenzo not built ($ENZO_LIBDIR/libenzo_p*_b*.dylib)"; exit 1; }
 libname="$(basename "$libenzo" .dylib)"; libname="${libname#lib}"
 echo "[grid] using $libenzo  (-l$libname)"
 
-# Enzo's exact -D defines (so the bridge is ABI-compatible with libenzo).
-DFLAGS="$(cd "$ENZO" && make -n Grid_EnzoModulesFixture.o MACH_CXX_NOMPI=g++-15 \
+# Enzo's exact -D defines (so the bridge is ABI-compatible with libenzo).  The
+# mpi flavor's `make -n` runs under use-mpi-yes, so it picks up -DUSE_MPI and the
+# MPI include path automatically.
+DFLAGS="$(cd "$ENZO" && make -n Grid_EnzoModulesFixture.o "${MACH_OVERRIDES[@]}" \
           LOCAL_HDF5_INSTALL="$HDF5" 2>/dev/null \
           | grep -oE '\-D[A-Za-z0-9_=]+' | sort -u | tr '\n' ' ')"
 INC="-I$ENZO -I$ENZO/hydro_rk -I$HDF5/include"
@@ -48,16 +144,20 @@ for src in Grid_EnzoModulesFixture enzomodules_grid_bridge enzomodules_problem_b
            enzomodules_hierarchy_bridge enzomodules_halo_bridge; do
   from="$repo/EnzoModules/src"; [ -f "$ENZO/$src.C" ] && from="$ENZO"
   echo "[grid] CXX $src"
-  g++-15 $DFLAGS $INC -fPIC -O2 -c "$from/$src.C" -o "/tmp/em_$src.o"
+  $CXX $DFLAGS $INC $MPI_INC -fPIC -O2 -c "$from/$src.C" -o "/tmp/em_$src.o"
   objs+=("/tmp/em_$src.o")
 done
 
 echo "[grid] LINK $OUT"
-g++-15 -dynamiclib -fPIC -o "$OUT" "${objs[@]}" \
-  -L"$ENZO" "-l$libname" -L"$HDF5/lib" -lhdf5 -L"$GFLIB" -lgfortran -lstdc++ \
-  -Wl,-rpath,"$ENZO" -Wl,-rpath,"$HDF5/lib" -Wl,-rpath,"$GFLIB"
+$CXX -dynamiclib -fPIC -o "$OUT" "${objs[@]}" \
+  -L"$ENZO_LIBDIR" "-l$libname" -L"$HDF5/lib" -lhdf5 -L"$GFLIB" -lgfortran -lstdc++ \
+  $MPI_LINK \
+  -Wl,-headerpad_max_install_names \
+  -Wl,-rpath,"$ENZO_LIBDIR" -Wl,-rpath,"$HDF5/lib" -Wl,-rpath,"$GFLIB"
 rm -f "${objs[@]}"
 # libenzo's install-name is a bare filename; rewrite the dependency to its
 # absolute path so the bridge dylib loads without DYLD_LIBRARY_PATH.
 install_name_tool -change "$(basename "$libenzo")" "$libenzo" "$OUT"
+# Note: the mpi flavor intentionally has NO libmpitrampoline dependency — MPI_*
+# symbols are resolved at load time from the host's MPItrampoline (see above).
 echo "[grid] OK -> $OUT"

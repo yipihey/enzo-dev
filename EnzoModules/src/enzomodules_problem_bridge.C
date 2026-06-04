@@ -37,6 +37,9 @@
 class ImplicitProblemABC;
 extern "C" void enzomodules_init_timer();
 int CommunicationInitialize(Eint32 *argc, char **argv[]);
+#ifdef USE_MPI
+Eflt64 CommunicationMinValue(Eflt64 Value);   /* global min reduction (CommunicationUtilities.C) */
+#endif
 int InitializeNew(char *filename, HierarchyEntry &TopGrid, TopGridData &MetaData,
                   ExternalBoundary &Exterior, float *Initialdt);
 class ImplicitProblemABC;
@@ -287,6 +290,20 @@ void enzomodules_problem_field_types(void *h, int gi, int *types)
 int enzomodules_problem_grid_size(void *h, int gi)
 { return ((EMProblem *)h)->grids[gi]->EnzoModulesGridSize(); }
 
+/* MPI locality: this rank's id and the rank count (0 / 1 in the serial flavor),
+ * and the home processor of grid `gi` (always 0 in serial).  These let the Julia
+ * side iterate only the grids resident on this rank, exactly as Enzo's own
+ * SolveHydroEquations does (it skips grids whose ProcessorNumber != mine). */
+int enzomodules_session_my_rank(void *h)   { return MyProcessorNumber; }
+int enzomodules_session_num_ranks(void *h) { return NumberOfProcessors; }
+
+int enzomodules_problem_grid_processor(void *h, int gi)
+{
+  EMProblem *p = (EMProblem *)h;
+  if (gi < 0 || gi >= (int)p->grids.size()) return -1;
+  return p->grids[gi]->ReturnProcessorNumber();
+}
+
 void enzomodules_problem_get_field(void *h, int gi, int fi, double *out)
 { ((EMProblem *)h)->grids[gi]->EnzoModulesGetField(fi, out); }
 
@@ -514,10 +531,18 @@ void *enzomodules_session_init(const char *paramfile)
   if (rc == FAIL) { free(fname); delete p; return NULL; }
 
   p->MetaData.dtDataDump = 0.0;
+#ifndef USE_MPI
   /* The root-grid Poisson FFT defaults to the MPI-only transpose; force the
-   * serial path since this library is built without MPI. */
+   * serial path in the serial flavor of this library.  In the MPI flavor we
+   * keep the parameter-file/transpose default so the distributed FFT runs. */
   UnigridTranspose = 0;
+#endif
   AddLevel(p->LevelArray, &p->TopGrid, 0);
+
+  /* Initial-grid distribution across ranks is done by InitializeNew's partition
+   * loop (CommunicationPartitionGrid, a no-op when NumberOfProcessors==1), and
+   * regrid load-balancing by RebuildHierarchy — both already invoked on the
+   * paths below, so no extra distribution call is needed here. */
 
 #ifdef TRANSFER
   /* Radiative transfer needs its own init (done in enzo.C, not InitializeNew):
@@ -783,10 +808,19 @@ double enzomodules_session_compute_dt(void *h, int level)
   int n = GenerateGridArray(p->LevelArray, level, &Grids);
   double dt = 1e30;
   for (int i = 0; i < n; i++) {
+    /* Skip grids owned by another rank: their data is not resident here, and
+     * a non-local grid contributes its dt via that rank's reduction below. */
+    if (Grids[i]->GridData->ReturnProcessorNumber() != MyProcessorNumber)
+      continue;
     double dtg = (double)Grids[i]->GridData->ComputeTimeStep();
     if (dtg < dt) dt = dtg;
   }
   delete[] Grids;
+#ifdef USE_MPI
+  /* The timestep is a global quantity: reduce the per-rank minimum across all
+   * ranks (no-op when NumberOfProcessors==1). */
+  dt = (double)CommunicationMinValue((Eflt64)dt);
+#endif
   double remaining = (double)p->MetaData.StopTime - (double)p->MetaData.Time;
   if (dt > remaining && remaining > 0) dt = remaining;
   return dt;

@@ -64,6 +64,12 @@
 
 EXTERN int CommunicationDirection;
 
+/* TRUE if Enzo called MPI_Init itself (standalone), FALSE if an external owner
+   such as MPI.jl initialized MPI before driving Enzo as a library.  Controls
+   whether CommunicationFinalize calls MPI_Finalize. */
+
+EXTERN int CommunicationOwnsMPI;
+
 /* This variable contains the most recent receive dependence; that is, the
    index of the receive handler which must complete first. */
 
