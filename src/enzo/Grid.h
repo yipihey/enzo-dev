@@ -2859,6 +2859,10 @@ int zEulerSweep(int j, int NumberOfSubgrids, fluxes *SubgridFluxes[],
     void EnzoModulesGetField(int field_index, double *data);
     int  EnzoModulesFieldIndex(int field_type);
     int  EnzoModulesGridSize();
+    // Σ over this grid's ACTIVE cells of BaryonField[field]*cellvolume — the
+    // conserved composite total (mass for Density). Summed over a level's local
+    // grids + Allreduce'd, it is the multi-rank conservation check (ADR-0005 #4).
+    double EnzoModulesActiveFieldIntegral(int field_index);
     // Self-gravity: write/read the cell-centered AccelerationField[dim] that
     // SolveHydroEquations reads as the gravity source — lets a :julia gravity
     // method feed an :enzo hydro. Set allocates if needed (ComputeAccelerations

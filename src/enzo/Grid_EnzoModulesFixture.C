@@ -88,6 +88,30 @@ void grid::EnzoModulesGetField(int field_index, double *data)
     data[i] = (double)BaryonField[field_index][i];
 }
 
+/* Σ over this grid's ACTIVE cells (GridStartIndex..GridEndIndex) of
+ * BaryonField[field]*cellvolume.  For field=Density this is the grid's mass; the
+ * session-level accessor sums it over a level's local grids and Allreduces it, so
+ * the composite total is conserved across ranks (ADR-0005 #4).  Returns 0 if the
+ * field is absent or the grid is unallocated here (a non-local grid). */
+double grid::EnzoModulesActiveFieldIntegral(int field_index)
+{
+  if (BaryonField[field_index] == NULL) return 0.0;
+  int kS = (GridRank > 2) ? GridStartIndex[2] : 0, kE = (GridRank > 2) ? GridEndIndex[2] : 0;
+  int jS = (GridRank > 1) ? GridStartIndex[1] : 0, jE = (GridRank > 1) ? GridEndIndex[1] : 0;
+  int iS = GridStartIndex[0], iE = GridEndIndex[0];
+  double total = 0.0;
+  for (int k = kS; k <= kE; k++)
+    for (int j = jS; j <= jE; j++)
+      for (int i = iS; i <= iE; i++) {
+        double V = (double)CellWidth[0][i];
+        if (GridRank > 1) V *= (double)CellWidth[1][j];
+        if (GridRank > 2) V *= (double)CellWidth[2][k];
+        int idx = i + GridDimension[0] * (j + GridDimension[1] * k);
+        total += (double)BaryonField[field_index][idx] * V;
+      }
+  return total;
+}
+
 /* Write the cell-centered AccelerationField[dim] (the gravity source that
  * SolveHydroEquations reads). Allocates the array if it does not exist, since a
  * :julia gravity slot replaces ComputeAccelerations (which normally allocates). */

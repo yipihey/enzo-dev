@@ -39,6 +39,7 @@ extern "C" void enzomodules_init_timer();
 int CommunicationInitialize(Eint32 *argc, char **argv[]);
 #ifdef USE_MPI
 Eflt64 CommunicationMinValue(Eflt64 Value);   /* global min reduction (CommunicationUtilities.C) */
+int CommunicationAllSumValues(Eflt64 *Values, int Number);   /* global sum to all ranks */
 #endif
 int InitializeNew(char *filename, HierarchyEntry &TopGrid, TopGridData &MetaData,
                   ExternalBoundary &Exterior, float *Initialdt);
@@ -824,6 +825,33 @@ double enzomodules_session_compute_dt(void *h, int level)
   double remaining = (double)p->MetaData.StopTime - (double)p->MetaData.Time;
   if (dt > remaining && remaining > 0) dt = remaining;
   return dt;
+}
+
+/* Global composite integral of BaryonField[field] over the ROOT grid (level 0),
+ * weighted by cell volume — the conserved total the reflux gate checks (mass for
+ * field=Density).  Each rank sums its LOCAL level-0 tiles (the root grid is split
+ * one tile per rank by CommunicationPartitionGrid), then the partial sums are
+ * reduced to ALL ranks, so every rank returns the same global value.  This is the
+ * multi-rank conservation primitive (ADR-0005 #4); in serial it is just the local
+ * sum (the All-sum is a no-op when NumberOfProcessors==1). */
+double enzomodules_session_global_field_integral(void *h, int field)
+{
+  EMProblem *p = (EMProblem *)h;
+  HierarchyEntry **Grids;
+  int n = GenerateGridArray(p->LevelArray, 0, &Grids);
+  double total = 0.0;
+  for (int i = 0; i < n; i++) {
+    if (Grids[i]->GridData->ReturnProcessorNumber() != MyProcessorNumber)
+      continue;   /* non-local tile: counted by its owning rank's partial sum */
+    total += Grids[i]->GridData->EnzoModulesActiveFieldIntegral(field);
+  }
+  delete[] Grids;
+#ifdef USE_MPI
+  Eflt64 v = (Eflt64)total;
+  CommunicationAllSumValues(&v, 1);   /* reduce partial sums to all ranks */
+  total = (double)v;
+#endif
+  return total;
 }
 
 /* Set the timestep on all grids of `level`. */
