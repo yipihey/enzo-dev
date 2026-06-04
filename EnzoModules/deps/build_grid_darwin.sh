@@ -161,3 +161,26 @@ install_name_tool -change "$(basename "$libenzo")" "$libenzo" "$OUT"
 # Note: the mpi flavor intentionally has NO libmpitrampoline dependency — MPI_*
 # symbols are resolved at load time from the host's MPItrampoline (see above).
 echo "[grid] OK -> $OUT"
+
+# ---- stage 3: the ADR-0005 #3 subprocess worker -----------------------------
+# A standalone (non-Julia) host process that dlopens the bridge above and serves
+# the EnzoNG bridge over the rpc.jl wire protocol (control channel + shared file).
+# Its per-symbol typed dispatch is GENERATED from the bridge manifest so it stays
+# in lockstep with session.jl; the contract hash baked into the generated header
+# is checked at the handshake.  Carrying no Julia runtime, its gcc/libstdc++ stack
+# never meets Julia's libc++ — the collision that blocks in-process MPI cannot
+# occur, so this is the process that will host the MPI libenzo (mpiexec -n N).
+WORKER_SRC="$repo/EnzoModules/src/enzomodules_worker.C"
+WORKER_INC="$repo/EnzoModules/src/enzomodules_worker_dispatch.inc"
+WORKER_OUT="$repo/EnzoModules/deps/enzomodules_worker"
+if [ -f "$WORKER_SRC" ]; then
+  echo "[worker] generating dispatch from the bridge manifest"
+  "$JULIA" --project="$repo/EnzoNG.jl/lib/EnzoLib/test" \
+    "$repo/EnzoModules/tools/gen_worker_dispatch.jl" "$WORKER_INC"
+  echo "[worker] CXX enzomodules_worker"
+  # Flavor-agnostic in source: the worker dlopens whichever bridge it is handed at
+  # runtime.  (#3b adds MPI_Init under -DUSE_MPI for the mpi flavor.)
+  "$CXX" -std=c++17 -O2 -Wall -I"$repo/EnzoModules/src" \
+    "$WORKER_SRC" -o "$WORKER_OUT" -ldl
+  echo "[worker] OK -> $WORKER_OUT"
+fi
