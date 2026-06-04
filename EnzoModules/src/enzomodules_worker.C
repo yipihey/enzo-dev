@@ -35,6 +35,9 @@
 #include <unistd.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#ifdef USE_MPI
+#include <mpi.h>
+#endif
 
 // ── a decoded argument (scalar value, or a pointer into the mmap'd shm) ───────
 struct Arg {
@@ -111,58 +114,143 @@ static bool parse_token(const std::string& t, Arg& a) {
     }
 }
 
+#ifdef USE_MPI
+// Each rank's OWN session handle.  session_init runs on every rank and returns a
+// DIFFERENT pointer per rank (each manages that rank's local grids), but the client
+// only ever holds rank 0's.  So when a broadcast call carries the handle, every rank
+// substitutes its own; and we capture it from any handle-returning call.  The handle
+// is the only scalar pointer ('p') arg in the bridge — all other pointers are shm
+// buffers ('b') — so a 'p' token is unambiguously the session handle.
+static void* g_my_handle = nullptr;
+#endif
+
+// Execute one control line collectively (every rank runs this for the SAME line,
+// so collective bridge calls — session_init→CommunicationPartitionGrid, set_boundary,
+// compute_dt's CommunicationMinValue, update_from_finer — stay in lockstep).  Writes
+// the full reply line ("RET …"/"ERR …") into `reply`.  Returns false on QUIT.
+static bool process_command(void* h, const char* shm_path, const std::string& line, std::string& reply) {
+    std::istringstream ss(line);
+    std::string cmd; ss >> cmd;
+    if (cmd == "QUIT") return false;
+    if (cmd != "CALL") { reply = "ERR bad-command " + cmd; return true; }
+
+    std::string sym; ss >> sym;
+    std::vector<Arg> args;
+    std::string tok; bool ok = true; bool has_buf = false;
+    while (ss >> tok) {
+        Arg a;
+        if (!parse_token(tok, a)) { ok = false; break; }
+        if (a.kind == 'b') has_buf = true;
+        args.push_back(std::move(a));
+    }
+    if (!ok) { reply = "ERR bad-token in " + sym; return true; }
+
+    // map shm and point each buffer arg into it (IN bytes already present).  NOTE
+    // (multi-rank): buffers reference rank-0's shared file; cross-rank field RPC is a
+    // #4 concern (collective evolve + a global reduction return only scalars).
+    Shm m;
+    if (has_buf) {
+        if (!shm_map(shm_path, m)) { reply = "ERR shm-map-failed " + sym; return true; }
+        for (auto& a : args)
+            if (a.kind == 'b') a.p = (void*)((char*)m.base + a.off);
+    }
+#ifdef USE_MPI
+    for (auto& a : args) if (a.kind == 'p') a.p = g_my_handle;   // use THIS rank's handle
+#endif
+
+    std::string out;
+    void* fn = dlsym(h, sym.c_str());
+    bool handled = fn ? worker_dispatch(sym, fn, args, out) : false;
+    if (has_buf) shm_unmap(m);   // msync flushes OUT-buffer writes back to the file
+
+    reply = !fn ? ("ERR unknown-symbol " + sym)
+          : !handled ? ("ERR undispatched " + sym)
+          : ("RET " + out);
+#ifdef USE_MPI
+    if (reply.rfind("RET p", 0) == 0)                            // captured a new handle
+        g_my_handle = (void*)(uintptr_t)strtoull(reply.c_str() + 5, nullptr, 10);
+#endif
+    return true;
+}
+
 int main(int argc, char** argv) {
     if (argc < 3) { fprintf(stderr, "usage: %s <shm_path> <bridge_dylib>\n", argv[0]); return 2; }
     const char* shm_path = argv[1];
     const char* lib_path = argv[2];
 
-    void* h = dlopen(lib_path, RTLD_NOW | RTLD_LOCAL);
-    if (!h) { fprintf(stderr, "worker: dlopen(%s) failed: %s\n", lib_path, dlerror()); return 3; }
+    int rank = 0;
+#ifdef USE_MPI
+    // The worker OWNS MPI in its own process (no Julia runtime here → no C++ ABI
+    // collision).  CommunicationInitialize in the bridge is guarded on
+    // MPI_Initialized, so it picks up this world instead of re-initializing.
+    MPI_Init(&argc, &argv);
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+#endif
 
-    // handshake: present the baked contract hash in decimal (client parses base 10).
-    std::cout << "READY " << (unsigned long long)WORKER_CONTRACT_HASH << "\n" << std::flush;
+    // CLAIM stdout for the protocol: the hosted Enzo library prints diagnostics to
+    // stdout (e.g. "MPI_Init: NumberOfProcessors = 2"), which would corrupt the
+    // control channel — and under mpiexec EVERY rank's stdout is merged into the
+    // one the client reads.  So on every rank redirect fd 1 → stderr (noise stays
+    // visible for debugging, off the channel); rank 0 keeps a private dup of the
+    // real stdout as the control FILE.  Do this BEFORE dlopen (static-init prints).
+    FILE* ctrl = nullptr;
+    if (rank == 0) ctrl = fdopen(dup(STDOUT_FILENO), "w");
+    dup2(STDERR_FILENO, STDOUT_FILENO);
+    auto emit = [&](const std::string& s) { if (ctrl) { fputs(s.c_str(), ctrl); fputc('\n', ctrl); fflush(ctrl); } };
 
+    void* h = dlopen(lib_path, RTLD_NOW | RTLD_GLOBAL);
+    if (!h) {
+        fprintf(stderr, "worker[rank %d]: dlopen(%s) failed: %s\n", rank, lib_path, dlerror());
+#ifdef USE_MPI
+        MPI_Abort(MPI_COMM_WORLD, 3);
+#endif
+        return 3;
+    }
+
+    // Only rank 0 speaks the control channel; non-zero ranks execute broadcast
+    // commands and stay silent on the channel.
+    {
+        char b[64]; snprintf(b, sizeof b, "READY %llu", (unsigned long long)WORKER_CONTRACT_HASH);
+        emit(b);
+    }
+
+#ifndef USE_MPI
     std::string line;
     while (std::getline(std::cin, line)) {
         if (line.empty()) continue;
-        std::istringstream ss(line);
-        std::string cmd; ss >> cmd;
-        if (cmd == "QUIT") break;
-        if (cmd != "CALL") { std::cout << "ERR bad-command " << cmd << "\n" << std::flush; continue; }
-
-        std::string sym; ss >> sym;
-        std::vector<Arg> args;
-        std::string tok; bool ok = true; bool has_buf = false;
-        while (ss >> tok) {
-            Arg a;
-            if (!parse_token(tok, a)) { ok = false; break; }
-            if (a.kind == 'b') has_buf = true;
-            args.push_back(std::move(a));
-        }
-        if (!ok) { std::cout << "ERR bad-token in " << sym << "\n" << std::flush; continue; }
-
-        // map shm and point each buffer arg into it (IN bytes already present).
-        Shm m;
-        if (has_buf) {
-            if (!shm_map(shm_path, m)) { std::cout << "ERR shm-map-failed " << sym << "\n" << std::flush; continue; }
-            for (auto& a : args)
-                if (a.kind == 'b') a.p = (void*)((char*)m.base + a.off);
-        }
-
-        std::string out;
-        void* fn = dlsym(h, sym.c_str());
-        bool handled = false;
-        if (!fn) {
-            out.clear();
-        } else {
-            handled = worker_dispatch(sym, fn, args, out);   // GENERATED: writes OUT bufs into shm
-        }
-        if (has_buf) shm_unmap(m);   // msync flushes OUT-buffer writes back to the file
-
-        if (!fn)            std::cout << "ERR unknown-symbol " << sym << "\n" << std::flush;
-        else if (!handled)  std::cout << "ERR undispatched " << sym << "\n" << std::flush;
-        else                std::cout << "RET " << out << "\n" << std::flush;
+        std::string reply;
+        if (!process_command(h, shm_path, line, reply)) break;
+        emit(reply);
     }
+#else
+    // Master-driven SPMD: rank 0 reads a command and broadcasts it to all ranks;
+    // every rank executes it (collective bridge calls run in lockstep); rank 0 alone
+    // replies.  Empty lines are skipped on rank 0 before the broadcast.
+    for (;;) {
+        std::string line;
+        int len = -1;   // -1 = EOF/QUIT sentinel
+        if (rank == 0) {
+            while (std::getline(std::cin, line) && line.empty()) { /* skip blanks */ }
+            len = (std::cin.good() || !line.empty()) ? (int)line.size() : -1;
+        }
+        MPI_Bcast(&len, 1, MPI_INT, 0, MPI_COMM_WORLD);
+        if (len < 0) break;                       // EOF on rank 0
+        line.resize(len);
+        if (len > 0) MPI_Bcast(&line[0], len, MPI_CHAR, 0, MPI_COMM_WORLD);
+
+        std::string reply;
+        bool cont = process_command(h, shm_path, line, reply);
+        int go = cont ? 1 : 0;
+        MPI_Bcast(&go, 1, MPI_INT, 0, MPI_COMM_WORLD);   // agree on QUIT across ranks
+        if (!go) break;
+        emit(reply);                              // no-op on non-zero ranks (ctrl==null)
+    }
+#endif
+
     dlclose(h);
+#ifdef USE_MPI
+    MPI_Finalize();
+#endif
+    if (ctrl) fclose(ctrl);
     return 0;
 }

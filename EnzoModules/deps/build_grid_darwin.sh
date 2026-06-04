@@ -172,15 +172,24 @@ echo "[grid] OK -> $OUT"
 # occur, so this is the process that will host the MPI libenzo (mpiexec -n N).
 WORKER_SRC="$repo/EnzoModules/src/enzomodules_worker.C"
 WORKER_INC="$repo/EnzoModules/src/enzomodules_worker_dispatch.inc"
-WORKER_OUT="$repo/EnzoModules/deps/enzomodules_worker"
 if [ -f "$WORKER_SRC" ]; then
   echo "[worker] generating dispatch from the bridge manifest"
   "$JULIA" --project="$repo/EnzoNG.jl/lib/EnzoLib/test" \
     "$repo/EnzoModules/tools/gen_worker_dispatch.jl" "$WORKER_INC"
-  echo "[worker] CXX enzomodules_worker"
-  # Flavor-agnostic in source: the worker dlopens whichever bridge it is handed at
-  # runtime.  (#3b adds MPI_Init under -DUSE_MPI for the mpi flavor.)
-  "$CXX" -std=c++17 -O2 -Wall -I"$repo/EnzoModules/src" \
-    "$WORKER_SRC" -o "$WORKER_OUT" -ldl
+  if [ "$FLAVOR" = "mpi" ]; then
+    # MPI worker: owns MPI_Init in its own (Julia-free) process, so it links the
+    # MPItrampoline directly (no double-load hazard — that was specific to the
+    # MPI.jl-in-process case).  Launched `mpiexec -n N`; rank 0 owns the control
+    # channel and broadcasts each command so collective bridge calls stay in lockstep.
+    WORKER_OUT="$repo/EnzoModules/deps/enzomodules_worker_mpi"
+    echo "[worker] CXX enzomodules_worker_mpi (-DUSE_MPI, MPItrampoline)"
+    "$CXX" -std=c++17 -O2 -Wall -DUSE_MPI -I"$TRAMP/include" -I"$repo/EnzoModules/src" \
+      "$WORKER_SRC" -o "$WORKER_OUT" -L"$TRAMP/lib" -lmpitrampoline -Wl,-rpath,"$TRAMP/lib" -ldl
+  else
+    WORKER_OUT="$repo/EnzoModules/deps/enzomodules_worker"
+    echo "[worker] CXX enzomodules_worker (serial)"
+    "$CXX" -std=c++17 -O2 -Wall -I"$repo/EnzoModules/src" \
+      "$WORKER_SRC" -o "$WORKER_OUT" -ldl
+  fi
   echo "[worker] OK -> $WORKER_OUT"
 fi

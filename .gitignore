@@ -65,6 +65,7 @@ EnzoModules/deps/*.so
 EnzoModules/deps/*.dylib
 EnzoModules/deps/*.o
 EnzoModules/deps/enzomodules_worker
+EnzoModules/deps/enzomodules_worker_mpi
 EnzoModules/src/enzomodules_worker_dispatch.inc
 src/enzo/libenzo_*.so
 src/enzo/libenzo_*.dylib
