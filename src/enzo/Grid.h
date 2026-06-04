@@ -2865,6 +2865,20 @@ int zEulerSweep(int j, int NumberOfSubgrids, fluxes *SubgridFluxes[],
     // normally does).
     void EnzoModulesSetAcceleration(int dim, const double *data);
     void EnzoModulesGetAcceleration(int dim, double *data);
+    // ADR-0003 part B: conservative :julia hydro under AMR. Read/write this
+    // grid's BoundaryFluxes (the RefinedFluxes a finer grid carried, and the
+    // coarse InitialFluxes a parent records under a subgrid) so a :julia hydro
+    // can feed Enzo's UpdateFromFinerGrids/CorrectForRefinedFluxes, plus the
+    // global-index geometry to map EnzoNG's recorded face fluxes into the
+    // fluxes struct. side: 0 = Left face, 1 = Right face. A flux plane is in the
+    // (orthogonal-dims) face order Enzo uses, value = F*dt/dx (a conserved-
+    // density change, indexed by Enzo BaryonField number).
+    void EnzoModulesGlobalStart(long_int gstart[]);   // active-region left global zone index per dim
+    void EnzoModulesGridEdge(double *left, double *right);  // physical edges per dim (for per-grid cell width)
+    int  EnzoModulesBoundaryFluxSize(int dim);        // # plane cells for a `dim` face (1 in 1D)
+    void EnzoModulesBoundaryFluxExtent(int dim, int side, long_int start[], long_int end[]);
+    void EnzoModulesSetBoundaryFlux(int field, int dim, int side, const double *plane); // ADD into BoundaryFluxes
+    void EnzoModulesGetBoundaryFlux(int field, int dim, int side, double *plane);
     // AMR: copy the refinement FlaggingField in / out (int per cell).
     void EnzoModulesSetFlagging(const int *data);
     void EnzoModulesGetFlagging(int *data);

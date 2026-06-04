@@ -304,6 +304,128 @@ void enzomodules_problem_set_acceleration(void *h, int gi, int dim, const double
 void enzomodules_problem_get_acceleration(void *h, int gi, int dim, double *out)
 { ((EMProblem *)h)->grids[gi]->EnzoModulesGetAcceleration(dim, out); }
 
+/* ---- ADR-0003 part B: conservative :julia hydro under AMR ---------------
+ * Bridge for writing EnzoNG's recorded face fluxes into Enzo's flux registers,
+ * so a :julia hydro slot can feed UpdateFromFinerGrids/CorrectForRefinedFluxes:
+ *   - each grid's BoundaryFluxes  = the RefinedFluxes a finer grid carried, and
+ *   - the parent's SubgridFluxesEstimate[level][i][sub] = the coarse InitialFluxes
+ *     under subgrid `sub`.
+ * Together these are exactly the two flux sets SolveHydroEquations fills; with
+ * them, Enzo's own machinery restores conservation across coarse-fine boundaries. */
+
+/* The i-th grid on `level` in GenerateGridArray order (the SAME order
+ * create_fluxes used to build SubgridFluxesEstimate[level]). */
+static grid *em_grid_on_level(EMProblem *p, int level, int i)
+{
+  HierarchyEntry **Grids;
+  int n = GenerateGridArray(p->LevelArray, level, &Grids);
+  grid *g = (i >= 0 && i < n) ? Grids[i]->GridData : NULL;
+  delete[] Grids;
+  return g;
+}
+
+/* Flat grid-list index (the gi the field/mesh accessors use) of the i-th grid on
+ * `level`, so a :julia AMR slot can build an EnzoGridMesh for the same grid whose
+ * subgrid fluxes it fills by (level, i). -1 if out of range. */
+int enzomodules_problem_grid_index_on_level(void *h, int level, int i)
+{
+  EMProblem *p = (EMProblem *)h;
+  grid *g = em_grid_on_level(p, level, i);
+  if (g == NULL) return -1;
+  for (size_t k = 0; k < p->grids.size(); k++)
+    if (p->grids[k] == g) return (int)k;
+  return -1;
+}
+
+/* Grid geometry / BoundaryFluxes accessors (grid-method wrappers, by flat gi). */
+void enzomodules_problem_grid_global_start(void *h, int gi, long_int *gstart)
+{ ((EMProblem *)h)->grids[gi]->EnzoModulesGlobalStart(gstart); }
+
+void enzomodules_problem_grid_edge(void *h, int gi, double *left, double *right)
+{ ((EMProblem *)h)->grids[gi]->EnzoModulesGridEdge(left, right); }
+
+int enzomodules_problem_boundary_flux_size(void *h, int gi, int dim)
+{ return ((EMProblem *)h)->grids[gi]->EnzoModulesBoundaryFluxSize(dim); }
+
+void enzomodules_problem_boundary_flux_extent(void *h, int gi, int dim, int side,
+                                              long_int *start, long_int *end)
+{ ((EMProblem *)h)->grids[gi]->EnzoModulesBoundaryFluxExtent(dim, side, start, end); }
+
+void enzomodules_problem_set_boundary_flux(void *h, int gi, int field, int dim,
+                                           int side, const double *plane)
+{ ((EMProblem *)h)->grids[gi]->EnzoModulesSetBoundaryFlux(field, dim, side, plane); }
+
+void enzomodules_problem_get_boundary_flux(void *h, int gi, int field, int dim,
+                                           int side, double *plane)
+{ ((EMProblem *)h)->grids[gi]->EnzoModulesGetBoundaryFlux(field, dim, side, plane); }
+
+/* Number of subgrid flux entries for the i-th grid on `level` (proper subgrids
+ * + 1 for the grid's own external boundary, the last entry). Requires
+ * create_fluxes(level) first; -1 if absent. */
+int enzomodules_problem_num_subgrids(void *h, int level, int i)
+{
+  EMProblem *p = (EMProblem *)h;
+  if (p->NumberOfSubgrids[level] == NULL) return -1;
+  return p->NumberOfSubgrids[level][i];
+}
+
+/* Coarse-index global extents of subgrid flux (level,i,sub) for `dim`/`side`
+ * (the footprint ReturnFluxDims set from the child's BoundaryFluxes / refinement).
+ * Length-3 outputs. */
+void enzomodules_problem_subgrid_flux_extent(void *h, int level, int i, int sub,
+                                             int dim, int side,
+                                             long_int *start, long_int *end)
+{
+  EMProblem *p = (EMProblem *)h;
+  fluxes *F = p->SubgridFluxesEstimate[level][i][sub];
+  long_int *s = (side == 0) ? F->LeftFluxStartGlobalIndex[dim]
+                            : F->RightFluxStartGlobalIndex[dim];
+  long_int *e = (side == 0) ? F->LeftFluxEndGlobalIndex[dim]
+                            : F->RightFluxEndGlobalIndex[dim];
+  for (int d = 0; d < 3; d++) { start[d] = s[d]; end[d] = e[d]; }
+}
+
+/* Size (plane cells) of subgrid flux (level,i,sub) for `dim` — the coarse-index
+ * footprint extent (1 in 1D). */
+int enzomodules_problem_subgrid_flux_size(void *h, int level, int i, int sub, int dim)
+{
+  EMProblem *p = (EMProblem *)h;
+  grid *g = em_grid_on_level(p, level, i);
+  int rank = g ? g->GetGridRank() : 1;
+  fluxes *F = p->SubgridFluxesEstimate[level][i][sub];
+  int size = 1;
+  for (int d = 0; d < rank; d++)
+    size *= F->LeftFluxEndGlobalIndex[dim][d] - F->LeftFluxStartGlobalIndex[dim][d] + 1;
+  return size;
+}
+
+/* SET (overwrite) a coarse InitialFlux plane into SubgridFluxesEstimate
+ * [level][i][sub]->{Left,Right}Fluxes[field][dim]. Allocates the array if NULL
+ * (CreateFluxes/ReturnFluxDims leaves the flux pointers NULL; SolveHydroEquations
+ * normally allocates them — we do the same). Overwrite (not add): the coarse
+ * InitialFlux is one coarse step's flux, recreated each step by create_fluxes. */
+void enzomodules_problem_set_subgrid_flux(void *h, int level, int i, int sub,
+                                          int field, int dim, int side,
+                                          const double *plane)
+{
+  EMProblem *p = (EMProblem *)h;
+  int size = enzomodules_problem_subgrid_flux_size(h, level, i, sub, dim);
+  fluxes *F = p->SubgridFluxesEstimate[level][i][sub];
+  float **arr = (side == 0) ? F->LeftFluxes[field] : F->RightFluxes[field];
+  if (arr[dim] == NULL) arr[dim] = new float[size];
+  for (int n = 0; n < size; n++) arr[dim][n] = (float)plane[n];
+}
+
+void enzomodules_problem_get_subgrid_flux(void *h, int level, int i, int sub,
+                                          int field, int dim, int side, double *plane)
+{
+  EMProblem *p = (EMProblem *)h;
+  int size = enzomodules_problem_subgrid_flux_size(h, level, i, sub, dim);
+  fluxes *F = p->SubgridFluxesEstimate[level][i][sub];
+  float **arr = (side == 0) ? F->LeftFluxes[field] : F->RightFluxes[field];
+  for (int n = 0; n < size; n++) plane[n] = (arr[dim] == NULL) ? 0.0 : (double)arr[dim][n];
+}
+
 int enzomodules_problem_num_particles(void *h, int gi)
 { return ((EMProblem *)h)->grids[gi]->ReturnNumberOfParticles(); }
 

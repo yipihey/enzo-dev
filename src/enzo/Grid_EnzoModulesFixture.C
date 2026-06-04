@@ -107,6 +107,82 @@ void grid::EnzoModulesGetAcceleration(int dim, double *data)
     data[i] = (AccelerationField[dim] == NULL) ? 0.0 : (double)AccelerationField[dim][i];
 }
 
+/* ---- ADR-0003 part B: BoundaryFluxes for conservative :julia AMR -------- */
+
+/* This grid's physical edges per dim (length-3 outputs) — so a :julia AMR slot
+ * can build a per-grid mesh with the correct (level-dependent) cell width. */
+void grid::EnzoModulesGridEdge(double *left, double *right)
+{
+  for (int dim = 0; dim < GridRank; dim++) {
+    left[dim]  = (double)GridLeftEdge[dim];
+    right[dim] = (double)GridRightEdge[dim];
+  }
+  for (int dim = GridRank; dim < MAX_DIMENSION; dim++) { left[dim] = 0.0; right[dim] = 0.0; }
+}
+
+/* Global zone index of this grid's first ACTIVE cell per dim (the value
+ * PrepareBoundaryFluxes uses for LeftFluxStartGlobalIndex[dim][dim], and the
+ * GridGlobalStart-equivalent xEulerSweep offsets the subgrid flux planes by).
+ * Lets a :julia hydro map its recorded face fluxes to the global flux indices. */
+void grid::EnzoModulesGlobalStart(long_int gstart[])
+{
+  for (int dim = 0; dim < GridRank; dim++)
+    gstart[dim] = nlongint((GridLeftEdge[dim] - DomainLeftEdge[dim]) / CellWidth[dim][0]);
+  for (int dim = GridRank; dim < MAX_DIMENSION; dim++)
+    gstart[dim] = 0;
+}
+
+/* Number of plane cells in this grid's `dim` boundary-flux face (the product of
+ * the active extents in the orthogonal dims; 1 in 1D). Ensures the structure
+ * exists + is sized/zeroed (ClearBoundaryFluxes). */
+int grid::EnzoModulesBoundaryFluxSize(int dim)
+{
+  if (BoundaryFluxes == NULL || BoundaryFluxes->LeftFluxes[0][dim] == NULL)
+    this->ClearBoundaryFluxes();
+  int size = 1;
+  for (int i = 0; i < GridRank; i++)
+    size *= BoundaryFluxes->LeftFluxEndGlobalIndex[dim][i] -
+            BoundaryFluxes->LeftFluxStartGlobalIndex[dim][i] + 1;
+  return size;
+}
+
+/* The global-index extents (start[], end[]) of this grid's `dim`/`side` boundary
+ * flux plane (side: 0=Left, 1=Right). Length-3 outputs. */
+void grid::EnzoModulesBoundaryFluxExtent(int dim, int side, long_int start[], long_int end[])
+{
+  if (BoundaryFluxes == NULL)
+    this->PrepareBoundaryFluxes();
+  long_int *s = (side == 0) ? BoundaryFluxes->LeftFluxStartGlobalIndex[dim]
+                            : BoundaryFluxes->RightFluxStartGlobalIndex[dim];
+  long_int *e = (side == 0) ? BoundaryFluxes->LeftFluxEndGlobalIndex[dim]
+                            : BoundaryFluxes->RightFluxEndGlobalIndex[dim];
+  for (int i = 0; i < 3; i++) { start[i] = s[i]; end[i] = e[i]; }
+}
+
+/* ADD a boundary-flux plane into this grid's BoundaryFluxes->{Left,Right}Fluxes
+ * [field][dim] (accumulate, because a finer grid's outer flux is summed over its
+ * temporal subcycles before UpdateFromFinerGrids projects it; ClearBoundaryFluxes
+ * zeros once at level entry). Plane length must be EnzoModulesBoundaryFluxSize. */
+void grid::EnzoModulesSetBoundaryFlux(int field, int dim, int side, const double *plane)
+{
+  if (BoundaryFluxes == NULL || BoundaryFluxes->LeftFluxes[field][dim] == NULL)
+    this->ClearBoundaryFluxes();
+  int size = this->EnzoModulesBoundaryFluxSize(dim);
+  float *f = (side == 0) ? BoundaryFluxes->LeftFluxes[field][dim]
+                         : BoundaryFluxes->RightFluxes[field][dim];
+  for (int i = 0; i < size; i++)
+    f[i] += (float)plane[i];
+}
+
+void grid::EnzoModulesGetBoundaryFlux(int field, int dim, int side, double *plane)
+{
+  int size = this->EnzoModulesBoundaryFluxSize(dim);
+  float *f = (side == 0) ? BoundaryFluxes->LeftFluxes[field][dim]
+                         : BoundaryFluxes->RightFluxes[field][dim];
+  for (int i = 0; i < size; i++)
+    plane[i] = (f == NULL) ? 0.0 : (double)f[i];
+}
+
 int grid::EnzoModulesFieldIndex(int field_type)
 {
   return FindField(field_type, FieldType, NumberOfBaryonFields);
