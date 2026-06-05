@@ -148,7 +148,7 @@ objs=()
 for src in Grid_EnzoModulesFixture enzomodules_grid_bridge enzomodules_problem_bridge \
            enzomodules_chemistry_bridge enzomodules_radiation_bridge enzomodules_ppm_grid_bridge \
            enzomodules_timing_init enzomodules_amr_bridge enzomodules_mhdct_bridge \
-           enzomodules_hierarchy_bridge enzomodules_halo_bridge; do
+           enzomodules_hierarchy_bridge enzomodules_halo_bridge enzomodules_hydro_rk_bridge; do
   from="$repo/EnzoModules/src"; [ -f "$ENZO/$src.C" ] && from="$ENZO"
   echo "[grid] CXX $src"
   $CXX $DFLAGS $INC $MPI_INC -fPIC -O2 -c "$from/$src.C" -o "/tmp/em_$src.o"
