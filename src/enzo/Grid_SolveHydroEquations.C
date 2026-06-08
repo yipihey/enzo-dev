@@ -510,6 +510,12 @@ int grid::SolveHydroEquations(int CycleNumber, int NumberOfSubgrids,
        the right thing for < 3 dimensions. */
     /* note: Start/EndIndex are zero based */
         
+    if (HydroMethod == LocalPPM)
+      ENZO_FAIL("HydroMethod=10 (LocalPPM) is an EnzoNG-managed solver. "
+                "Run through EnzoLib.run_amr, which supplies the conservative "
+                "one-ghost local-PPM hook; native EvolveHierarchy does not yet "
+                "embed the Julia kernel.");
+
     if (HydroMethod == PPM_DirectEuler)
       this->SolvePPM_DE(CycleNumber, NumberOfSubgrids, SubgridFluxes,
                         CellWidthTemp, GridGlobalStart, GravityOn,

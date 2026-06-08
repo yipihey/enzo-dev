@@ -268,7 +268,8 @@ const hydro_method
   MHD_RK               = 4,
   NoHydro              = 5, 
   MHD_Li             = 6,
-  HydroMethodUndefined = 7;
+  HydroMethodUndefined = 7,
+  LocalPPM             = 10;
 
 // enum hydro_method {PPM_DirectEuler, PPM_LagrangeRemap, Zeus_Hydro};
 

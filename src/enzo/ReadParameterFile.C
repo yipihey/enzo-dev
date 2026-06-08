@@ -1546,8 +1546,21 @@ int ReadParameterFile(FILE *fptr, TopGridData &MetaData, float *Initialdt)
                  DrivenFlowSeed);
   }
 
-  /* In order to use filtered fields we need additional ghost zones */
-  if (SGSFilterStencil/2 + 2 > NumberOfGhostZones)
+  /* In order to use filtered fields we need additional ghost zones. LocalPPM
+     deliberately permits one ghost when every SGS model is disabled. */
+  int SGSModelEnabled =
+    SGScoeffERS2M2Star != 0. ||
+    SGScoeffEVStarEnS2Star != 0. ||
+    SGScoeffEnS2StarTrace != 0. ||
+    SGScoeffNLemfCompr != 0. ||
+    SGScoeffNLu != 0. ||
+    SGScoeffNLuNormedEnS2Star != 0. ||
+    SGScoeffNLb != 0. ||
+    SGScoeffSSu != 0. ||
+    SGScoeffSSb != 0. ||
+    SGScoeffSSemf != 0.;
+  if (SGSFilterStencil/2 + 2 > NumberOfGhostZones &&
+      (HydroMethod != LocalPPM || SGSModelEnabled))
     ENZO_FAIL("SGS filtering needs additional ghost zones!\n");
 
   // all these models are calculated based on the partial derivatives of
@@ -1583,12 +1596,12 @@ int ReadParameterFile(FILE *fptr, TopGridData &MetaData, float *Initialdt)
      default Riemann solver and flux reconstruction methods.  These
      parameters aren't used for PPM_LagrangeRemap and Zeus. */
 
-  if (HydroMethod == PPM_DirectEuler) {
+  if (HydroMethod == PPM_DirectEuler || HydroMethod == LocalPPM) {
     if (RiemannSolver == INT_UNDEFINED)
       RiemannSolver = TwoShock;
     if (ReconstructionMethod == INT_UNDEFINED)
       ReconstructionMethod = PPM;
-    if (ReconstructionMethod == PLM) {
+    if (HydroMethod == PPM_DirectEuler && ReconstructionMethod == PLM) {
       if (MyProcessorNumber == ROOT_PROCESSOR)
 	printf("ReconstructionMethod = PLM.\n"
 	       "These are the defaults for the MUSCL (hydro_rk) solvers,\n"
@@ -1614,7 +1627,8 @@ int ReadParameterFile(FILE *fptr, TopGridData &MetaData, float *Initialdt)
 
   if (HydroMethod==MHD_RK) UseMHD = 1;
   if (HydroMethod==MHD_Li) {UseMHDCT = 1; UseMHD = 1;}
-  if (HydroMethod==MHD_Li ||HydroMethod==MHD_RK || HydroMethod==HD_RK ){
+  if (HydroMethod==MHD_Li ||HydroMethod==MHD_RK || HydroMethod==HD_RK ||
+      HydroMethod==LocalPPM ){
       MaxVelocityIndex = 3;
   }else{
       MaxVelocityIndex = MetaData.TopGridRank ;
