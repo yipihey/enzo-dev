@@ -28,6 +28,8 @@ struct RateTables{T,V<:AbstractVector{T}}
     # collisional / recombination / H2 formation+destruction (Abel+97)
     k1::V; k2::V; k3::V; k4::V; k5::V; k6::V; k7::V; k8::V; k9::V; k10::V
     k11::V; k12::V; k13::V; k14::V; k15::V; k16::V; k17::V; k18::V; k19::V; k22::V
+    # deuterium / HD network (reactions 50-56; Enzo calc_rates.F)
+    k50::V; k51::V; k52::V; k53::V; k54::V; k55::V; k56::V
     # cooling coefficients (Black81 / Cen92)
     ceHI::V; ceHeI::V; ceHeII::V
     ciHI::V; ciHeI::V; ciHeII::V; ciHeIS::V
@@ -70,6 +72,7 @@ function build_rate_tables(::Type{T} = Float64;
     mk() = Vector{T}(undef, nratec)
     k1=mk();k2=mk();k3=mk();k4=mk();k5=mk();k6=mk();k7=mk();k8=mk();k9=mk();k10=mk()
     k11=mk();k12=mk();k13=mk();k14=mk();k15=mk();k16=mk();k17=mk();k18=mk();k19=mk();k22=mk()
+    k50=mk();k51=mk();k52=mk();k53=mk();k54=mk();k55=mk();k56=mk()
     ceHI=mk();ceHeI=mk();ceHeII=mk()
     ciHI=mk();ciHeI=mk();ciHeII=mk();ciHeIS=mk()
     reHII=mk();reHeII1=mk();reHeII2=mk();reHeIII=mk();brem=mk()
@@ -176,6 +179,19 @@ function build_rate_tables(::Type{T} = Float64;
         # 3-body H2 formation (Abel+02 low-density coefficient); k22 reused below
         k22[i] = 1.3e-32*(ttt/300.0)^(-0.38)/kunit
 
+        # ── deuterium / HD network (Enzo calc_rates.F reactions 50-56) ────────
+        #   50) H+ + D  -> H  + D+      51) H  + D+ -> H+ + D
+        #   52) H2 + D+ -> HD + H+      53) HD + H+ -> H2 + D+
+        #   54) H2 + D  -> HD + H       55) HD + H  -> H2 + D
+        #   56) D  + H- -> HD + e-     [57) D- + H -> HD + e- folded in via ×2]
+        k50[i] = 1.0e-9 * exp(-41.0/ttt)        / kunit
+        k51[i] = 1.0e-9                          / kunit
+        k52[i] = 2.1e-9                          / kunit
+        k53[i] = 1.0e-9 * exp(-457.0/ttt)       / kunit
+        k54[i] = 7.5e-11* exp(-3820.0/ttt)      / kunit
+        k55[i] = 7.5e-11* exp(-4240.0/ttt)      / kunit
+        k56[i] = 1.5e-9 * (ttt/300.0)^(-0.1)    / kunit
+
         # ── cooling coefficients (Black 1981 / Cen 1992) ──────────────────────
         ceHI[i]   = 7.5e-19*exp(-min(log(dhuge),118348.0/ttt))/(1.0+sqrt(ttt/1.0e5))/coolunit
         ceHeI[i]  = 9.1e-27*exp(-min(log(dhuge),13179.0/ttt))*ttt^(-0.1687)/(1.0+sqrt(ttt/1.0e5))/coolunit
@@ -212,6 +228,7 @@ function build_rate_tables(::Type{T} = Float64;
 
     return RateTables{T,Vector{T}}(grid,
         k1,k2,k3,k4,k5,k6,k7,k8,k9,k10,k11,k12,k13,k14,k15,k16,k17,k18,k19,k22,
+        k50,k51,k52,k53,k54,k55,k56,
         ceHI,ceHeI,ceHeII,ciHI,ciHeI,ciHeII,ciHeIS,reHII,reHeII1,reHeII2,reHeIII,brem,
         vibh,hyd01k,h2k01,roth,rotl,gphdl,gpldl,
         T(2.873e-73/Float64(units.coolunit)),  # compa (Compton, Peebles 1971)·/coolunit
@@ -231,6 +248,7 @@ function rate_tables_to_device(be, rt::RateTables{T}) where {T}
         d(rt.k1),d(rt.k2),d(rt.k3),d(rt.k4),d(rt.k5),d(rt.k6),d(rt.k7),d(rt.k8),
         d(rt.k9),d(rt.k10),d(rt.k11),d(rt.k12),d(rt.k13),d(rt.k14),d(rt.k15),
         d(rt.k16),d(rt.k17),d(rt.k18),d(rt.k19),d(rt.k22),
+        d(rt.k50),d(rt.k51),d(rt.k52),d(rt.k53),d(rt.k54),d(rt.k55),d(rt.k56),
         d(rt.ceHI),d(rt.ceHeI),d(rt.ceHeII),d(rt.ciHI),d(rt.ciHeI),d(rt.ciHeII),
         d(rt.ciHeIS),d(rt.reHII),d(rt.reHeII1),d(rt.reHeII2),d(rt.reHeIII),d(rt.brem),
         d(rt.vibh),d(rt.hyd01k),d(rt.h2k01),d(rt.roth),d(rt.rotl),d(rt.gphdl),d(rt.gpldl),

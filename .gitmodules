@@ -1,0 +1,3 @@
+[submodule "EnzoNG.jl/lib/Krome/extern/krome"]
+	path = EnzoNG.jl/lib/Krome/extern/krome
+	url = https://bitbucket.org/tgrassi/krome.git

@@ -1,0 +1,11 @@
+# Dedicated test environment for Krome.jl. The [sources] make the path-dev'd
+# sibling packages authoritative (the root-[sources] rule from CLAUDE.md).
+[deps]
+Krome = "1a2b3c4d-0011-4000-8000-000000000011"
+ChemistryKernels = "1a2b3c4d-0009-4000-8000-000000000009"
+KernelAbstractions = "63c18a36-062a-441e-b654-da1e3ab1ce7c"
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[sources]
+Krome = {path = ".."}
+ChemistryKernels = {path = "../../ChemistryKernels"}

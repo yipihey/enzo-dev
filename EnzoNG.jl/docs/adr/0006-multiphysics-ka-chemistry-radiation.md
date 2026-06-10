@@ -75,21 +75,34 @@ Implemented and structured for the parity harness (CPU correctness/conservation
 suites included; they run headless on any CI):
 
 - ✅ `ChemistryKernels`: rate/cooling tables, `cool1d_multi!` edot, switchable
-  `solve_rate_cool!` for **6- and 9-species** (full collisional + H2/H- network),
-  `make_consistent` conservation, photo coupling hooks.
+  `solve_rate_cool!` for **6-, 9- AND 12-species** — the full collisional +
+  H2/H- network plus the **deuterium/HD set (k50–k56, reactions 50–56)** with the
+  DI/DII/HDI semi-implicit updates and Enzo's exact charge-conservation electron
+  closure. `conserve` flag toggles `make_consistent` (default on for robustness;
+  **off for bit-exact Enzo parity**, since native `solve_rate_cool` does not
+  renormalize species).
 - ✅ `RadiationKernels`: M1 closure, GLF multi-group transport, per-cell photo
   coupling.
+- ✅ **Generic mass-action executor** (`ChemistryKernels.GenericNetwork` /
+  `generic_step!`): an arbitrary-network sibling of the primordial solver, the
+  lowering target for KROME networks (CPU+GPU).
+- ✅ **`lib/Krome`** (Krome.jl): parses KROME `react_*` files, compiles their
+  Fortran rate expressions to Julia, and lowers onto `GenericNetwork`. Upstream
+  KROME is vendored as a **git submodule** (`extern/krome`, GPL-3.0, see the
+  license note in `lib/Krome/README.md`).
 
 Remaining (explicit stubs, next stages):
 
-- ⏳ **12-species deuterium chemistry.** DI/DII/HDI are carried and conserved
-  (held static), but the D/HD reaction set (k50–k57 in `calc_rates.F`) is not yet
-  ported — `nspecies=12` currently runs the 9-species H/He/H2 network with D
-  inert. Porting k50–k57 completes it.
 - ⏳ **Bit-tight Fortran-fixture certification.** The suites here are f64 sanity +
-  conservation gates. The golden-fixture layer (Enzo `solve_rate_cool` /
-  `cool1d_multi` outputs via the EnzoLib RPC harness, the same mechanism
-  `PPMKernels`/`PoissonKernels` use) is the next step and was not runnable in the
-  porting environment (no Julia runtime).
+  conservation gates plus a gated parity scaffold
+  (`test/test_parity_fortran.jl`). The golden-fixture layer diffs KA
+  `solve_rate_cool!(conserve=false)` against Enzo's `solve_rate_cool` via
+  `EnzoLib.session_solve_cooling` (same mechanism PPMKernels/PoissonKernels use);
+  the remaining hookup is a one-zone field accessor on the bridge. Not runnable in
+  the porting environment (no Julia runtime).
+- ⏳ **KROME DLSODES-parity.** The generic executor uses the Anninos+97
+  semi-implicit scheme, not KROME's DLSODES; density/dust/shielding-dependent
+  rates are skipped (counted in `KromeNetwork.skipped`). Temperature-dependent
+  networks (incl. all primordial variants) are covered.
 - ⏳ **Cloudy/metal cooling** (`cool1d_cloudy.F`) and the **UV-background table**
   (`RadiationFieldCalculateRates.C`) — additive, not on the critical path.

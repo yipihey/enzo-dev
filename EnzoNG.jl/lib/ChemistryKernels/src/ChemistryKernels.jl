@@ -107,6 +107,7 @@ include("interpolate.jl")  # log-T table index + linear interp (interpolate.F)
 include("rates.jl")        # calc_rates.F: k-rates + cooling coefficient tables
 include("cooling.jl")      # cool1d_multi.F: per-cell edot assembly
 include("network.jl")      # solve_rate_cool.F: sub-cycled semi-implicit BDF step
+include("generic.jl")      # arbitrary mass-action network executor (KROME target)
 include("adapt.jl")        # Adapt rules so the SoA structs reach device kernels
 
 end # module

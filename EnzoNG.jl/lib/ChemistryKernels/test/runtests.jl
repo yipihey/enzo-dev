@@ -67,7 +67,23 @@ end
             @test isapprox(sp.de[1], max(de_q, 1e-20); rtol = 1e-6)
             @test all(>=(0), sp.HI) && all(>=(0), sp.HII)
             @test isfinite(ge[1]) && ge[1] > 0
+            if nsp == 12
+                @test isfinite(sp.DI[1]) && sp.DI[1] > 0
+                @test isfinite(sp.DII[1]) && sp.DII[1] > 0
+                @test isfinite(sp.HDI[1]) && sp.HDI[1] > 0
+            end
         end
+    end
+
+    @testset "Enzo-parity mode (conserve=false) runs & stays finite" begin
+        # bit-exact-Enzo mode skips make_consistent; species evolve by the raw
+        # semi-implicit BDF + charge-conservation electrons, as solve_rate_cool.F.
+        sp, ge, dens = one_cell(T; nsp = 9, dens = 1.0, ge = 1.0e3, ionized = false)
+        CK.solve_rate_cool!(ge, dens, sp, rt, u;
+            nspecies = 9, gamma = 5/3, temperature_units = 1.0e4,
+            dt = 1.0e-3, idim = 1, i1 = 1, i2 = 1, itmax = 5000, conserve = false)
+        @test all(isfinite, sp.HI) && all(isfinite, sp.H2I)
+        @test sp.HI[1] > 0 && ge[1] > 0
     end
 
     @testset "hot gas cools (edot < 0)" begin

@@ -46,7 +46,7 @@ end
 @inline function _solve_cell!(sp, idx, dens::T, ge_in::T, dt::T, gamma::T,
                               rt, units, temperature_units::T,
                               comp1::T, comp2::T, gammah::T, photo, has_photo::Bool,
-                              itmax::Int, ::Val{NSP}) where {T,NSP}
+                              conserve::Bool, itmax::Int, ::Val{NSP}) where {T,NSP}
     @inbounds begin
         de  = sp.de[idx]
         HI  = sp.HI[idx];  HII  = sp.HII[idx]
@@ -54,6 +54,9 @@ end
         HM   = NSP ≥ 9 ? sp.HM[idx]   : zero(T)
         H2I  = NSP ≥ 9 ? sp.H2I[idx]  : zero(T)
         H2II = NSP ≥ 9 ? sp.H2II[idx] : zero(T)
+        DI   = NSP ≥ 12 ? sp.DI[idx]  : zero(T)
+        DII  = NSP ≥ 12 ? sp.DII[idx] : zero(T)
+        HDI  = NSP ≥ 12 ? sp.HDI[idx] : zero(T)
         ge = ge_in
 
         # conserved nuclei budgets (chemistry only moves atoms between ionization
@@ -139,12 +142,42 @@ end
                 H2In = _bdf(sH2I, aH2I, H2I, dtit)
             end
 
+            # ── deuterium / HD network (NSP=12; Enzo solve_rate_cool.F block D) ─
+            DIn = DI; DIIn = DII; HDIn = HDI
+            if NSP ≥ 12
+                k50 = interp(rt.k50, ii, tdef); k51 = interp(rt.k51, ii, tdef)
+                k52 = interp(rt.k52, ii, tdef); k53 = interp(rt.k53, ii, tdef)
+                k54 = interp(rt.k54, ii, tdef); k55 = interp(rt.k55, ii, tdef)
+                k56 = interp(rt.k56, ii, tdef)
+                # D shares H's collisional ion/recomb (k1/k2) and photo-ionization.
+                # DI : form k2·DII·de + k51·DII·HI + 2·k55·HDI·HI/3 ;
+                #      destroy k1·de + k50·HII + k54·H2I/2 + k56·HM (+ photo)
+                sDI = k2*DIIn*de + k51*DIIn*HIn + T(2)*k55*HDI*HIn/T(3)
+                aDI = k1*de + k50*HIIn + k54*H2In/T(2) + k56*HMn +
+                      (has_photo ? kHI : zero(T))
+                DIn = _bdf(sDI, aDI, DI, dtit)
+                # DII: form k1·DI·de + k50·HII·DI + 2·k53·HII·HDI/3 (+ photo·DI) ;
+                #      destroy k2·de + k51·HI + k52·H2I/2
+                sDII = k1*DIn*de + k50*HIIn*DIn + T(2)*k53*HIIn*HDI/T(3) +
+                       (has_photo ? kHI*DIn : zero(T))
+                aDII = k2*de + k51*HIn + k52*H2In/T(2)
+                DIIn = _bdf(sDII, aDII, DII, dtit)
+                # HDI: form 3·(k52·DII·H2I/4 + k54·DI·H2I/4 + 2·k56·DI·HM/2) ;
+                #      destroy k53·HII + k55·HI
+                sHDI = T(3)*(k52*DIIn*H2In/T(4) + k54*DIn*H2In/T(4) +
+                             T(2)*k56*DIn*HMn/T(2))
+                aHDI = k53*HIIn + k55*HIn
+                HDIn = _bdf(sHDI, aHDI, HDI, dtit)
+            end
+
             # commit, close electrons by charge conservation, advance energy/clock
             HI = max(HIn, T(RATE_TINY));  HII = max(HIIn, T(RATE_TINY))
             HeI = max(HeIn, T(RATE_TINY)); HeII = max(HeIIn, T(RATE_TINY))
             HeIII = max(HeIIIn, T(RATE_TINY))
             HM = max(HMn, T(RATE_TINY)); H2I = max(H2In, T(RATE_TINY))
             H2II = max(H2IIn, T(RATE_TINY))
+            DI = max(DIn, T(RATE_TINY)); DII = max(DIIn, T(RATE_TINY))
+            HDI = max(HDIn, T(RATE_TINY))
             de = _electron_density(HII, HeII, HeIII, HM, H2II, Val(NSP))
             ge = max(ge + edot / dens * dtit, T(RATE_TINY))
 
@@ -152,18 +185,22 @@ end
             ttot ≥ dt * (one(T) - T(1e-6)) && break
         end
 
-        # make_consistent: renormalize species to their fixed nuclei budgets so
-        # the independent semi-implicit updates conserve H and He exactly.
-        Hsum = HI + HII + (NSP ≥ 9 ? HM + H2I + H2II : zero(T))
-        sH = Htot / max(Hsum, T(RATE_TINY))
-        HI *= sH; HII *= sH
-        if NSP ≥ 9
-            HM *= sH; H2I *= sH; H2II *= sH
+        # make_consistent (optional): renormalize H/He species to their fixed
+        # nuclei budgets so the independent semi-implicit updates conserve exactly.
+        # Enzo's native solve_rate_cool does NOT do this -- pass `conserve=false`
+        # for bit-exact Fortran parity, `true` (default) for robustness.
+        if conserve
+            Hsum = HI + HII + (NSP ≥ 9 ? HM + H2I + H2II : zero(T))
+            sH = Htot / max(Hsum, T(RATE_TINY))
+            HI *= sH; HII *= sH
+            if NSP ≥ 9
+                HM *= sH; H2I *= sH; H2II *= sH
+            end
+            Hesum = HeI + HeII + HeIII
+            sHe = Hetot / max(Hesum, T(RATE_TINY))
+            HeI *= sHe; HeII *= sHe; HeIII *= sHe
+            de = _electron_density(HII, HeII, HeIII, HM, H2II, Val(NSP))
         end
-        Hesum = HeI + HeII + HeIII
-        sHe = Hetot / max(Hesum, T(RATE_TINY))
-        HeI *= sHe; HeII *= sHe; HeIII *= sHe
-        de = _electron_density(HII, HeII, HeIII, HM, H2II, Val(NSP))
 
         # write the updated state back
         sp.de[idx] = de
@@ -172,13 +209,16 @@ end
         if NSP ≥ 9
             sp.HM[idx] = HM; sp.H2I[idx] = H2I; sp.H2II[idx] = H2II
         end
+        if NSP ≥ 12
+            sp.DI[idx] = DI; sp.DII[idx] = DII; sp.HDI[idx] = HDI
+        end
         return ge
     end
 end
 
 @kernel function _solve_rate_cool_kernel!(ge, @Const(dens), sp, rt, units,
                                           gamma, temperature_units, comp1, comp2,
-                                          gammah, photo, has_photo::Bool,
+                                          gammah, photo, has_photo::Bool, conserve::Bool,
                                           dt, itmax::Int, ::Val{NSP},
                                           i1::Int, j1::Int, idim::Int) where {NSP}
     gi, gj = @index(Global, NTuple)
@@ -188,7 +228,7 @@ end
     @inbounds ge[idx] = _solve_cell!(sp, idx, dens[idx], ge[idx], T(dt), T(gamma),
                                      rt, units, T(temperature_units),
                                      T(comp1), T(comp2), T(gammah), photo, has_photo,
-                                     itmax, Val(NSP))
+                                     conserve, itmax, Val(NSP))
 end
 
 """
@@ -209,14 +249,14 @@ function solve_rate_cool!(ge, dens, sp::Species, rt, units;
                           dt::Real, idim::Integer, i1::Integer, i2::Integer,
                           j1::Integer = 1, j2::Integer = 1, itmax::Integer = 10000,
                           comp1::Real = 0, comp2::Real = 0, gammah::Real = 0,
-                          photo = nothing)
+                          photo = nothing, conserve::Bool = true)
     be = KA.get_backend(ge)
     ni = Int(i2 - i1 + 1); nj = Int(j2 - j1 + 1)
     has_photo = photo !== nothing
     ph = has_photo ? photo : PhotoRates(ge, ge, ge, ge, ge)  # dummy, never read
     _solve_rate_cool_kernel!(be)(ge, dens, sp, rt, units, gamma, temperature_units,
-                                 comp1, comp2, gammah, ph, has_photo, dt, Int(itmax),
-                                 Val(Int(nspecies)), Int(i1), Int(j1), Int(idim);
-                                 ndrange = (ni, nj))
+                                 comp1, comp2, gammah, ph, has_photo, conserve, dt,
+                                 Int(itmax), Val(Int(nspecies)),
+                                 Int(i1), Int(j1), Int(idim); ndrange = (ni, nj))
     return ge
 end

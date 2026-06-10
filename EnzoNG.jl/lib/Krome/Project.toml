@@ -1,0 +1,22 @@
+name = "Krome"
+uuid = "1a2b3c4d-0011-4000-8000-000000000011"
+authors = ["T. Abel and contributors"]
+version = "0.1.0"
+
+# Krome.jl -- a Julia front-end for the KROME chemistry package
+# (Grassi et al. 2014; https://bitbucket.org/tgrassi/krome, GPL-3.0). It parses
+# KROME `react_*` network files into a backend-agnostic IR and lowers them onto
+# `ChemistryKernels.GenericNetwork`, so ANY KROME network becomes a CPU+GPU
+# (KernelAbstractions) chemistry solver available to every EnzoNG code -- the same
+# single-source contract as the hand-written primordial network.
+#
+# The upstream KROME repository is vendored as a git submodule under
+# `extern/krome` (kept under its own GPL-3.0 license, NOT copied into this tree);
+# Krome.jl reads its `networks/react_*` reaction databases.
+[deps]
+ChemistryKernels = "1a2b3c4d-0009-4000-8000-000000000009"
+KernelAbstractions = "63c18a36-062a-441e-b654-da1e3ab1ce7c"
+
+[compat]
+KernelAbstractions = "0.9"
+julia = "1.10"
