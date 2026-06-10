@@ -1,0 +1,24 @@
+name = "Grackle"
+uuid = "1a2b3c4d-0012-4000-8000-000000000012"
+authors = ["T. Abel and contributors"]
+version = "0.1.0"
+
+# Grackle.jl -- a Julia front-end for the Grackle chemistry & cooling library
+# (grackle-project/grackle, Enzo Public License; descended from Enzo's
+# solve_rate_cool.F / cool1d_multi.F). It loads Grackle's Cloudy metal-cooling
+# HDF5 tables into ChemistryKernels.CloudyTable (the KA GPU hot path), and binds
+# the built libgrackle.so as the ground-truth oracle.
+#
+# Grackle's primordial network IS Enzo's, already ported in ChemistryKernels; the
+# value-add wired here is the Cloudy metal-line cooling (cool1d_cloudy_g.F),
+# ported to KernelAbstractions for GPU performance. Upstream Grackle is a git
+# submodule under extern/grackle.
+[deps]
+ChemistryKernels = "1a2b3c4d-0009-4000-8000-000000000009"
+HDF5 = "f67ccb44-e63f-5c2f-98bd-6dc0ccc4ba2f"
+KernelAbstractions = "63c18a36-062a-441e-b654-da1e3ab1ce7c"
+
+[compat]
+HDF5 = "0.16, 0.17"
+KernelAbstractions = "0.9"
+julia = "1.10"

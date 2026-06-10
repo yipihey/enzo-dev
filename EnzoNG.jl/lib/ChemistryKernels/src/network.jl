@@ -46,6 +46,7 @@ end
 @inline function _solve_cell!(sp, idx, dens::T, ge_in::T, dt::T, gamma::T,
                               rt, units, temperature_units::T,
                               comp1::T, comp2::T, gammah::T, photo, has_photo::Bool,
+                              cloudy, has_cloudy::Bool, zmetal::T, fh::T,
                               conserve::Bool, itmax::Int, ::Val{NSP}) where {T,NSP}
     @inbounds begin
         de  = sp.de[idx]
@@ -94,6 +95,14 @@ end
             edot = edot_scalar(de, HI, HII, HeI, HeII, HeIII,
                                (NSP ≥ 9 ? H2I : zero(T)), dens, tgas, rt, ii, tdef,
                                units, comp1, comp2, gammah, Val(NSP)) + pheat
+            # Grackle Cloudy metal-line cooling: edot += Λ(n_H,T)·Z·rhoH², in
+            # coolunit (coolunit_inv converts the cgs table value), rhoH = fh·ρ.
+            if has_cloudy
+                rhoH = fh * dens
+                lognH = log10(max(rhoH * units.dom, T(RATE_TINY)))
+                edot += cloudy_edot(cloudy, lognH, log10(tgas)) * zmetal *
+                        rhoH * rhoH * units.coolunit_inv
+            end
 
             # adaptive sub-step: 10% of electron & energy change, capped (rate_timestep)
             dtde = abs(dedot) > T(RATE_TINY) ? T(0.1) * de / abs(dedot) : dt
@@ -221,8 +230,9 @@ end
 
 @kernel function _solve_rate_cool_kernel!(ge, @Const(dens), sp, rt, units,
                                           gamma, temperature_units, comp1, comp2,
-                                          gammah, photo, has_photo::Bool, conserve::Bool,
-                                          dt, itmax::Int, ::Val{NSP},
+                                          gammah, photo, has_photo::Bool,
+                                          cloudy, has_cloudy::Bool, @Const(metal), fh,
+                                          conserve::Bool, dt, itmax::Int, ::Val{NSP},
                                           i1::Int, j1::Int, idim::Int) where {NSP}
     gi, gj = @index(Global, NTuple)
     i = i1 + gi - 1; j = j1 + gj - 1
@@ -231,6 +241,7 @@ end
     @inbounds ge[idx] = _solve_cell!(sp, idx, dens[idx], ge[idx], T(dt), T(gamma),
                                      rt, units, T(temperature_units),
                                      T(comp1), T(comp2), T(gammah), photo, has_photo,
+                                     cloudy, has_cloudy, T(metal[idx]), T(fh),
                                      conserve, itmax, Val(NSP))
 end
 
@@ -252,13 +263,19 @@ function solve_rate_cool!(ge, dens, sp::Species, rt, units;
                           dt::Real, idim::Integer, i1::Integer, i2::Integer,
                           j1::Integer = 1, j2::Integer = 1, itmax::Integer = 10000,
                           comp1::Real = 0, comp2::Real = 0, gammah::Real = 0,
-                          photo = nothing, conserve::Bool = true)
+                          photo = nothing, conserve::Bool = true,
+                          cloudy = nothing, metallicity = nothing, fh::Real = 0.76)
     be = KA.get_backend(ge)
     ni = Int(i2 - i1 + 1); nj = Int(j2 - j1 + 1)
     has_photo = photo !== nothing
     ph = has_photo ? photo : PhotoRates(ge, ge, ge, ge, ge)  # dummy, never read
+    has_cloudy = cloudy !== nothing
+    cl = has_cloudy ? cloudy : _make_dummy_cloudy(eltype(ge))
+    metal = metallicity === nothing ? dens :
+            (metallicity isa AbstractArray ? metallicity : fill!(similar(dens), metallicity))
     _solve_rate_cool_kernel!(be)(ge, dens, sp, rt, units, gamma, temperature_units,
-                                 comp1, comp2, gammah, ph, has_photo, conserve, dt,
+                                 comp1, comp2, gammah, ph, has_photo,
+                                 cl, has_cloudy, metal, fh, conserve, dt,
                                  Int(itmax), Val(Int(nspecies)),
                                  Int(i1), Int(j1), Int(idim); ndrange = (ni, nj))
     return ge

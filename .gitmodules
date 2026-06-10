@@ -1,3 +1,6 @@
 [submodule "EnzoNG.jl/lib/Krome/extern/krome"]
 	path = EnzoNG.jl/lib/Krome/extern/krome
 	url = https://bitbucket.org/tgrassi/krome.git
+[submodule "EnzoNG.jl/lib/Grackle/extern/grackle"]
+	path = EnzoNG.jl/lib/Grackle/extern/grackle
+	url = https://github.com/grackle-project/grackle.git

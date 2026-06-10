@@ -1,0 +1,10 @@
+[deps]
+Grackle = "1a2b3c4d-0012-4000-8000-000000000012"
+ChemistryKernels = "1a2b3c4d-0009-4000-8000-000000000009"
+HDF5 = "f67ccb44-e63f-5c2f-98bd-6dc0ccc4ba2f"
+KernelAbstractions = "63c18a36-062a-441e-b654-da1e3ab1ce7c"
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[sources]
+Grackle = {path = ".."}
+ChemistryKernels = {path = "../../ChemistryKernels"}

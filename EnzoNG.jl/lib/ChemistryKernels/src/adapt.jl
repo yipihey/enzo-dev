@@ -6,6 +6,13 @@
 
 Adapt.adapt_structure(to, s::Species) = Species(Adapt.adapt(to, getfield(s, :fields)))
 
+function Adapt.adapt_structure(to, t::CloudyTable{T}) where {T}
+    a(v) = Adapt.adapt(to, v)
+    p1=a(t.par1); return CloudyTable{T,typeof(p1)}(t.rank, t.n1, t.n2, t.n3,
+        p1, a(t.par2), a(t.par3), t.dpar1, t.dpar2, t.dpar3,
+        a(t.cooling), a(t.heating), t.with_heating)
+end
+
 function Adapt.adapt_structure(to, net::GenericNetwork{IM,RM,T}) where {IM,RM,T}
     reac = Adapt.adapt(to, net.reac); prod = Adapt.adapt(to, net.prod)
     rate = Adapt.adapt(to, net.rate)
