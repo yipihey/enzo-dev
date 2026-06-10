@@ -94,3 +94,6 @@ end
         @test edot[1] < 0          # collisionally ionized primordial gas radiates
     end
 end
+
+# Runnable Fortran golden-fixture parity (self-skips without gfortran/src/enzo).
+include("test_parity_fortran.jl")

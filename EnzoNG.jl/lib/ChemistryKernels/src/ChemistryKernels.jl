@@ -50,7 +50,7 @@ const KA = KernelAbstractions
 export backend, has_backend, device_zeros, to_device, to_host
 export RateTables, build_rate_tables, ChemistryUnits
 export Species, species_names, nspecies_for
-export cool1d_multi!, solve_rate_cool!
+export cool1d_multi!, solve_rate_cool!, edot_cell, edot_scalar
 
 # ── backend registry (verbatim PPMKernels convention) ────────────────────────
 const _BACKENDS = Dict{Symbol,Any}(:cpu => CPU())

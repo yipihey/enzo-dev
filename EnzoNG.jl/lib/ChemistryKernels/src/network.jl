@@ -89,8 +89,11 @@ end
             dedot = k1*HI*de - k2*HII*de +
                     (k3*HeI*de - k4*HeII*de + k5*HeII*de - k6*HeIII*de) * q +
                     (has_photo ? kHI*HI + (kHeI*HeI + kHeII*HeII)*q : zero(T))
-            edot = edot_cell(sp, idx, dens, tgas, rt, ii, tdef, units,
-                             comp1, comp2, gammah, Val(NSP)) + pheat
+            # edot from the CURRENT local densities (NOT the stale grid arrays),
+            # so cooling tracks ionization within the sub-cycle.
+            edot = edot_scalar(de, HI, HII, HeI, HeII, HeIII,
+                               (NSP ≥ 9 ? H2I : zero(T)), dens, tgas, rt, ii, tdef,
+                               units, comp1, comp2, gammah, Val(NSP)) + pheat
 
             # adaptive sub-step: 10% of electron & energy change, capped (rate_timestep)
             dtde = abs(dedot) > T(RATE_TINY) ? T(0.1) * de / abs(dedot) : dt

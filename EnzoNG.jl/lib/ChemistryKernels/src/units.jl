@@ -39,22 +39,28 @@ struct ChemistryUnits{T}
 end
 
 """
-    chemistry_units(T; urho, uxyz, utim, aye) -> ChemistryUnits{T}
+    chemistry_units(T; urho, uxyz, utim, aye, uaye=1.0) -> ChemistryUnits{T}
 
 Assemble the chemistry unit factors from Enzo's base units (`urho` density,
-`uxyz` length, `utim` time, in cgs) at expansion factor `aye`. Follows the
-definitions at the top of `calc_rates.F` / `cool1d_multi.F`.
-"""
-function chemistry_units(::Type{T}; urho, uxyz, utim, aye) where {T}
-    mh   = PhysConst.mass_h
-    dom  = urho * aye^3 / mh
-    # coolunit = (aye^5 * xbase1^2 * mh^2) / (tbase1^3 * dbase1), with
-    # dbase1 = urho*aye^3 (proper) and xbase1 = uxyz/aye (comoving→ proper length).
-    xbase1 = uxyz / aye
-    dbase1 = urho * aye^3
+`uxyz` length, `utim` time, in cgs) at expansion factor `aye`, matching the
+definitions in `calc_rates.F` **exactly** (verified against the standalone Enzo
+chemistry build):
+
     tbase1 = utim
-    coolunit = (aye^5 * xbase1^2 * mh^2) / (tbase1^3 * dbase1)
-    kunit    = (urho * aye^3) / (mh * tbase1)
+    xbase1 = uxyz / (aye·uaye)              # uxyz is comoving = [x]·a
+    dbase1 = urho · (aye·uaye)^3            # urho is proper-at-units / a^3
+    kunit    = (uaye^3 · m_H) / (dbase1 · tbase1)
+    coolunit = (uaye^5 · xbase1^2 · m_H^2) / (tbase1^3 · dbase1)
+    dom      = urho · aye^3 / m_H           # proper H number density factor
+"""
+function chemistry_units(::Type{T}; urho, uxyz, utim, aye, uaye = 1.0) where {T}
+    mh     = PhysConst.mass_h
+    tbase1 = utim
+    xbase1 = uxyz / (aye * uaye)
+    dbase1 = urho * (aye * uaye)^3
+    dom    = urho * aye^3 / mh
+    kunit    = (uaye^3 * mh) / (dbase1 * tbase1)
+    coolunit = (uaye^5 * xbase1^2 * mh^2) / (tbase1^3 * dbase1)
     return ChemistryUnits{T}(T(dom), T(1/dom), T(coolunit), T(1/coolunit),
                              T(kunit), T(tbase1), T(aye))
 end

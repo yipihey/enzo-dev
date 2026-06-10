@@ -60,13 +60,30 @@ photoelectric dust heating. Returns `edot`; the integrator advances
 @inline function edot_cell(sp, idx, dens::T, tgas::T, rt, i::Int, tdef::T,
                            units, comp1::T, comp2::T, gammah::T,
                            ::Val{NSP}) where {T,NSP}
+    @inbounds begin
+        H2I_ = NSP ≥ 9 ? sp.H2I[idx] : zero(T)
+        return edot_scalar(sp.de[idx], sp.HI[idx], sp.HII[idx], sp.HeI[idx],
+                           sp.HeII[idx], sp.HeIII[idx], H2I_, dens, tgas, rt, i, tdef,
+                           units, comp1, comp2, gammah, Val(NSP))
+    end
+end
+
+"""
+    edot_scalar(de, HI, HII, HeI, HeII, HeIII, H2I, dens, tgas, rt, i, tdef,
+                units, comp1, comp2, gammah, ::Val{NSP}) -> edot
+
+Net heating−cooling rate from the *current* species values passed as scalars (not
+read from a grid array). The sub-cycled integrator MUST use this with its evolving
+local densities — computing `edot` from stale array values freezes `n_e` and lets
+the gas over-ionize without cooling (the bug this signature prevents).
+"""
+@inline function edot_scalar(de_::T, HI_::T, HII_::T, HeI_::T, HeII_::T, HeIII_::T,
+                             H2I_::T, dens::T, tgas::T, rt, i::Int, tdef::T,
+                             units, comp1::T, comp2::T, gammah::T,
+                             ::Val{NSP}) where {T,NSP}
     dom     = units.dom
     dom_inv = units.dom_inv
     @inbounds begin
-        de_  = sp.de[idx]
-        HI_  = sp.HI[idx];  HII_  = sp.HII[idx]
-        HeI_ = sp.HeI[idx]; HeII_ = sp.HeII[idx]; HeIII_ = sp.HeIII[idx]
-
         ceHI   = interp(rt.ceHI, i, tdef);   ceHeI  = interp(rt.ceHeI, i, tdef)
         ceHeII = interp(rt.ceHeII, i, tdef)
         ciHI   = interp(rt.ciHI, i, tdef);   ciHeI  = interp(rt.ciHeI, i, tdef)
@@ -101,7 +118,6 @@ photoelectric dust heating. Returns `edot`; the integrator advances
 
         # ── H2 / HD line cooling (9- and 12-species networks) ─────────────────
         if NSP ≥ 9
-            H2I_ = sp.H2I[idx]
             galdl = interp(rt.gpldl, i, tdef)              # low-density limit
             gahdl = interp(rt.gphdl, i, tdef)              # high-density (roth)
             # Lepp & Shull bridging: cool = gahdl / (1 + gahdl/(n·galdl))
