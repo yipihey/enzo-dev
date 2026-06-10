@@ -131,6 +131,38 @@ void grid::EnzoModulesGetAcceleration(int dim, double *data)
     data[i] = (AccelerationField[dim] == NULL) ? 0.0 : (double)AccelerationField[dim][i];
 }
 
+/* Gravity intermediates: the GravitatingMassField (Poisson source) and PotentialField
+ * Enzo actually solves on, so EnzoNG can test its deposit/Poisson/accel kernels against
+ * Enzo's own fields (identical inputs).  These live on the GravitatingMassField mesh
+ * (GravitatingMassFieldDimension, its own cell size), NOT the baryon grid. */
+int grid::EnzoModulesGMFSize()
+{
+  int size = 1;
+  for (int dim = 0; dim < GridRank; dim++)
+    size *= GravitatingMassFieldDimension[dim];
+  return size;
+}
+
+void grid::EnzoModulesGMFDims(int *dims)
+{
+  for (int dim = 0; dim < 3; dim++)
+    dims[dim] = (dim < GridRank) ? GravitatingMassFieldDimension[dim] : 1;
+}
+
+void grid::EnzoModulesGetGravitatingMass(double *data)
+{
+  int size = this->EnzoModulesGMFSize();
+  for (int i = 0; i < size; i++)
+    data[i] = (GravitatingMassField == NULL) ? 0.0 : (double)GravitatingMassField[i];
+}
+
+void grid::EnzoModulesGetPotential(double *data)
+{
+  int size = this->EnzoModulesGMFSize();
+  for (int i = 0; i < size; i++)
+    data[i] = (PotentialField == NULL) ? 0.0 : (double)PotentialField[i];
+}
+
 /* ---- ADR-0003 part B: BoundaryFluxes for conservative :julia AMR -------- */
 
 /* This grid's physical edges per dim (length-3 outputs) — so a :julia AMR slot
@@ -312,6 +344,18 @@ void grid::EnzoModulesGetParticlePosition(int dim, double *data)
     data[i] = (double)ParticlePosition[dim][i];
 }
 
+void grid::EnzoModulesGetParticleVelocity(int dim, double *data)
+{
+  for (int i = 0; i < NumberOfParticles; i++)
+    data[i] = (ParticleVelocity[dim] == NULL) ? 0.0 : (double)ParticleVelocity[dim][i];
+}
+
+void grid::EnzoModulesGetParticleMass(double *data)
+{
+  for (int i = 0; i < NumberOfParticles; i++)
+    data[i] = (ParticleMass == NULL) ? 0.0 : (double)ParticleMass[i];
+}
+
 /* CIC-deposit the grid's particles onto its own GravitatingMassFieldParticles
  * (the standard particle-mesh operation), and expose the result for tests. */
 int grid::EnzoModulesDepositParticles()
@@ -343,6 +387,51 @@ double grid::EnzoModulesDepositCellVolume()
   for (int dim = 0; dim < GridRank; dim++)
     vol *= (double)GravitatingMassFieldParticlesCellSize;
   return vol;
+}
+
+/* CIC-deposit this grid's particles onto a BaryonField-sized DENSITY field
+ * (`data`, flat, incl. ghosts; ghosts left 0).  Cell-edge CIC: cell index =
+ * (x-activeLeft)/dx, weights (1-f)/f.  periodic=1 wraps mod activeN (the periodic
+ * ROOT, where this mirrors the host CIC exactly — a parity-neutral drop-in that
+ * removes the ~2M-particle host marshalling); periodic=0 clamps out-of-range
+ * deposits (a non-periodic SUBGRID — wrapping there scatters edge particles to the
+ * opposite edge and corrupts the source).  Density = particle mass / cell volume. */
+void grid::EnzoModulesDepositParticleDensity(double *data, int periodic)
+{
+  int size = 1;
+  for (int d = 0; d < GridRank; d++) size *= GridDimension[d];
+  for (int i = 0; i < size; i++) data[i] = 0.0;
+  if (NumberOfParticles <= 0 || GridRank != 3) return;
+
+  int N[3], gs[3];
+  double left[3], dx[3], cellvol = 1.0;
+  for (int d = 0; d < 3; d++) {
+    gs[d]   = GridStartIndex[d];
+    N[d]    = GridEndIndex[d] - GridStartIndex[d] + 1;
+    dx[d]   = (double)CellWidth[d][0];
+    left[d] = (double)CellLeftEdge[d][GridStartIndex[d]];
+    cellvol *= dx[d];
+  }
+  const int sx = 1, sy = GridDimension[0], sz = GridDimension[0] * GridDimension[1];
+  for (int p = 0; p < NumberOfParticles; p++) {
+    double g0 = ((double)ParticlePosition[0][p] - left[0]) / dx[0];
+    double g1 = ((double)ParticlePosition[1][p] - left[1]) / dx[1];
+    double g2 = ((double)ParticlePosition[2][p] - left[2]) / dx[2];
+    int i0 = (int)floor(g0); double fx = g0 - i0;
+    int j0 = (int)floor(g1); double fy = g1 - j0;
+    int k0 = (int)floor(g2); double fz = g2 - k0;
+    double m = (double)ParticleMass[p] / cellvol;
+    double wx[2] = {1.0 - fx, fx}, wy[2] = {1.0 - fy, fy}, wz[2] = {1.0 - fz, fz};
+    for (int di = 0; di < 2; di++) for (int dj = 0; dj < 2; dj++) for (int dk = 0; dk < 2; dk++) {
+      int ii = i0 + di, jj = j0 + dj, kk = k0 + dk;
+      if (periodic) {
+        ii = ((ii % N[0]) + N[0]) % N[0]; jj = ((jj % N[1]) + N[1]) % N[1]; kk = ((kk % N[2]) + N[2]) % N[2];
+      } else if (ii < 0 || ii >= N[0] || jj < 0 || jj >= N[1] || kk < 0 || kk >= N[2]) {
+        continue;
+      }
+      data[(gs[0]+ii)*sx + (gs[1]+jj)*sy + (gs[2]+kk)*sz] += m * wx[di] * wy[dj] * wz[dk];
+    }
+  }
 }
 
 /* ---- Radiative transfer (single photon-package ray) ------------------ */

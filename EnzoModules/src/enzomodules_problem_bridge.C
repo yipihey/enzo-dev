@@ -108,9 +108,13 @@ int StarParticleFinalize(HierarchyEntry *Grids[], TopGridData *MetaData,
                          int NumberOfGrids, LevelHierarchyEntry *LevelArray[],
                          int level, Star *&AllStars,
                          int TotalStarParticleCountPrevious[], int &OutputNow);
+/* dt0 is FLOAT (position precision) in Enzo's real signature, NOT double: in a
+ * p4 (precision-32) build FLOAT is float, so a hardcoded `double` here mangles to
+ * a symbol libenzo_p4_b4 doesn't export.  Use the macro so the bridge matches
+ * whatever precision libenzo was compiled with. */
 int ComputeDednerWaveSpeeds(TopGridData *MetaData,
                             LevelHierarchyEntry *LevelArray[], int level,
-                            double dt0);
+                            FLOAT dt0);
 int ActiveParticleInitialize(HierarchyEntry *Grids[], TopGridData *MetaData,
                              int NumberOfGrids, LevelHierarchyEntry *LevelArray[],
                              int ThisLevel);
@@ -308,6 +312,13 @@ int enzomodules_problem_grid_processor(void *h, int gi)
 void enzomodules_problem_get_field(void *h, int gi, int fi, double *out)
 { ((EMProblem *)h)->grids[gi]->EnzoModulesGetField(fi, out); }
 
+/* CIC-deposit grid gi's particles onto a baryon-mesh DENSITY field (out, flat,
+ * incl ghosts) in one C++ pass — lets a :julia gravity slot get the DM source on
+ * the gas mesh without marshalling every particle position to the host + a host
+ * CIC (the gravity-slot bottleneck).  Mirrors the host CIC exactly (parity-neutral). */
+void enzomodules_problem_deposit_particle_density(void *h, int gi, double *out, int periodic)
+{ ((EMProblem *)h)->grids[gi]->EnzoModulesDepositParticleDensity(out, periodic); }
+
 /* Write a field (flat, incl. ghost zones) back into the LIVE grid's BaryonField.
  * Enables a host-language physics method to mutate the Enzo state in place (the
  * ':julia' slot swap): read with get_field, compute, write back here. */
@@ -321,6 +332,15 @@ void enzomodules_problem_set_acceleration(void *h, int gi, int dim, const double
 
 void enzomodules_problem_get_acceleration(void *h, int gi, int dim, double *out)
 { ((EMProblem *)h)->grids[gi]->EnzoModulesGetAcceleration(dim, out); }
+
+/* Gravity intermediates on the GravitatingMassField mesh — Enzo's actual Poisson
+ * source and solved potential, so EnzoNG can test its kernels against them. */
+void enzomodules_problem_gmf_dims(void *h, int gi, int *out)
+{ ((EMProblem *)h)->grids[gi]->EnzoModulesGMFDims(out); }
+void enzomodules_problem_get_gravitating_mass(void *h, int gi, double *out)
+{ ((EMProblem *)h)->grids[gi]->EnzoModulesGetGravitatingMass(out); }
+void enzomodules_problem_get_potential(void *h, int gi, double *out)
+{ ((EMProblem *)h)->grids[gi]->EnzoModulesGetPotential(out); }
 
 /* ---- ADR-0003 part B: conservative :julia hydro under AMR ---------------
  * Bridge for writing EnzoNG's recorded face fluxes into Enzo's flux registers,
@@ -449,6 +469,20 @@ int enzomodules_problem_num_particles(void *h, int gi)
 
 void enzomodules_problem_get_particle_pos(void *h, int gi, int dim, double *out)
 { ((EMProblem *)h)->grids[gi]->EnzoModulesGetParticlePosition(dim, out); }
+
+void enzomodules_problem_get_particle_vel(void *h, int gi, int dim, double *out)
+{ ((EMProblem *)h)->grids[gi]->EnzoModulesGetParticleVelocity(dim, out); }
+
+void enzomodules_problem_get_particle_mass(void *h, int gi, double *out)
+{ ((EMProblem *)h)->grids[gi]->EnzoModulesGetParticleMass(out); }
+
+/* Particle setters — the injection direction for cross-code shared ICs
+ * (ADR-0006: the SAME particle set into Enzo and RAMSES). */
+void enzomodules_problem_set_particle_pos(void *h, int gi, int dim, double *in)
+{ ((EMProblem *)h)->grids[gi]->EnzoModulesSetParticlePosition(dim, in); }
+
+void enzomodules_problem_set_particle_vel(void *h, int gi, int dim, double *in)
+{ ((EMProblem *)h)->grids[gi]->EnzoModulesSetParticleVelocity(dim, in); }
 
 /* ---- Persistent session: drive the timestep loop step-by-step ---------
  * These let a host language (e.g. a Python re-implementation of EvolveLevel)
@@ -709,6 +743,18 @@ int enzomodules_session_gravity(void *h, int level)
   }
   delete[] Grids;
   return rc;
+}
+
+/* Deposit-only: populate the GravitatingMassField (PrepareDensityField) WITHOUT the
+ * per-grid SolveForPotential.  Lets a :julia gravity slot read Enzo's exact source and
+ * solve it on the GPU — skipping Enzo's slow subgrid multigrid. */
+int enzomodules_session_prepare_density(void *h, int level)
+{
+  EMProblem *p = (EMProblem *)h;
+  if (p->SiblingGridListStorage[level] == NULL)
+    enzomodules_session_set_boundary(h, level);
+  return (PrepareDensityField(p->LevelArray, level, &p->MetaData, 0.5,
+                              p->SiblingGridListStorage) == FAIL) ? 1 : 0;
 }
 
 /* Update particle positions on all grids of `level` (drift by dtFixed). */

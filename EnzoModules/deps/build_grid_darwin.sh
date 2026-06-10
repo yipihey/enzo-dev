@@ -15,8 +15,8 @@ set -euo pipefail
 
 FLAVOR="${1:-serial}"
 case "$FLAVOR" in
-  serial|mpi) ;;
-  *) echo "usage: $0 [serial|mpi]"; exit 1 ;;
+  serial|mpi|f32) ;;
+  *) echo "usage: $0 [serial|mpi|f32]"; exit 1 ;;
 esac
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -85,6 +85,22 @@ if [ "$FLAVOR" = "mpi" ]; then
                   LOCAL_MPI_INSTALL="$TRAMP" LOCAL_LIBS_MPI="")
   MPI_INC="-I$TRAMP/include"
   MPI_LINK="$MPI_USYMS"
+  PREC_TARGETS="precision-64 particles-64"
+elif [ "$FLAVOR" = "f32" ]; then
+  # 32-bit baryon + 32-bit particle Enzo (p4_b4) — the faithful-precision CPU
+  # reference for the EnzoNG f32 GPU kernels.  Coexists with the f64 serial bridge
+  # (which the bit-tight f64 oracle tests depend on): its libenzo lives in
+  # $ENZO/f32 and its bridge is libenzomodules_grid_f32.dylib, selected at load
+  # time via ENV["ENZOMODULES_GRID_LIB"].  The C-ABI is precision-independent
+  # (the bridge casts enzo_float<->double element-wise), so no Julia-side change.
+  CXX="g++-15"; CC="gcc-15"
+  ENZO_LIBDIR="$ENZO/f32"
+  OUT="$repo/EnzoModules/deps/libenzomodules_grid_f32.dylib"
+  MPI_MAKE_TARGET="use-mpi-no"
+  EXTRA_CONFIG=""
+  MACH_OVERRIDES=(MACH_CXX_NOMPI="$CXX" MACH_CC_NOMPI="$CC" MACH_LD_NOMPI="$CXX")
+  MPI_INC=""; MPI_LINK=""
+  PREC_TARGETS="precision-32 particles-32"
 else
   CXX="g++-15"; CC="gcc-15"
   ENZO_LIBDIR="$ENZO"
@@ -93,6 +109,7 @@ else
   EXTRA_CONFIG=""
   MACH_OVERRIDES=(MACH_CXX_NOMPI="$CXX" MACH_CC_NOMPI="$CC" MACH_LD_NOMPI="$CXX")
   MPI_INC=""; MPI_LINK=""
+  PREC_TARGETS="precision-64 particles-64"
 fi
 mkdir -p "$ENZO_LIBDIR"
 
@@ -106,14 +123,17 @@ if [ -z "$libenzo" ]; then
   ( cd "$repo" && ./configure )
   # The serial dylib (if any) lives at $ENZO/libenzo_*.dylib; a mpi build would
   # clobber that name during `make lib`, so stash and restore it.
+  # `make lib` always emits libenzo_*.dylib into $ENZO; a flavor that keeps its
+  # library elsewhere ($ENZO/mpi or $ENZO/f32) must stash any serial libenzo there
+  # first (so it isn't clobbered) and move the freshly-built one to its own dir.
   stash=""
-  if [ "$FLAVOR" = "mpi" ]; then
+  if [ "$ENZO_LIBDIR" != "$ENZO" ]; then
     existing="$(ls "$ENZO"/libenzo_p*_b*.dylib 2>/dev/null | head -1 || true)"
     if [ -n "$existing" ]; then stash="/tmp/$(basename "$existing").serial-stash"; mv "$existing" "$stash"; fi
   fi
   ( cd "$ENZO"
     make machine-darwin
-    make "$MPI_MAKE_TARGET" precision-64 particles-64 integers-32 ${EXTRA_CONFIG:+$EXTRA_CONFIG}
+    make "$MPI_MAKE_TARGET" $PREC_TARGETS integers-32 ${EXTRA_CONFIG:+$EXTRA_CONFIG}
     make clean
     LIBRARY_PATH="$GFLIB:${LIBRARY_PATH:-}" make lib -j"$(sysctl -n hw.ncpu)" \
       "${MACH_OVERRIDES[@]}" \
@@ -121,7 +141,7 @@ if [ -z "$libenzo" ]; then
       LOCAL_HDF5_INSTALL="$HDF5" LOCAL_FC_INSTALL="$GFLIB" \
       MACH_SHARED_FLAGS=-fPIC SHARED_OPT=-shared )
   built="$(ls "$ENZO"/libenzo_p*_b*.dylib 2>/dev/null | head -1 || true)"
-  if [ "$FLAVOR" = "mpi" ] && [ -n "$built" ]; then mv "$built" "$ENZO_LIBDIR/"; fi
+  if [ "$ENZO_LIBDIR" != "$ENZO" ] && [ -n "$built" ]; then mv "$built" "$ENZO_LIBDIR/"; fi
   [ -n "$stash" ] && mv "$stash" "$ENZO/$(basename "$stash" .serial-stash)"
   libenzo="$(ls "$ENZO_LIBDIR"/libenzo_p*_b*.dylib 2>/dev/null | head -1 || true)"
 fi
@@ -129,12 +149,15 @@ fi
 libname="$(basename "$libenzo" .dylib)"; libname="${libname#lib}"
 echo "[grid] using $libenzo  (-l$libname)"
 
-# Pin the Make.config MPI state to THIS flavor before extracting DFLAGS.  Stage 1
-# sets it only when it builds libenzo; if libenzo is cached (the common case) the
-# config still reflects whatever flavor was built LAST.  Building the serial bridge
-# while the config says use-mpi-yes would compile the bridge objects with -DUSE_MPI
-# and fail the (MPI-less) serial link on _MPI_* — so set it explicitly here.
-( cd "$ENZO" && make "$MPI_MAKE_TARGET" >/dev/null 2>&1 || true )
+# Pin the Make.config MPI *and precision* state to THIS flavor before extracting
+# DFLAGS.  Stage 1 sets these only when it builds libenzo; if libenzo is cached
+# (the common case) the config still reflects whatever flavor was built LAST.
+# Building the serial bridge while the config says use-mpi-yes would compile the
+# bridge objects with -DUSE_MPI and fail the (MPI-less) serial link on _MPI_*; and
+# building the f32 bridge while the config says precision-64 would bake the wrong
+# enzo_float size into the bridge -D flags (ABI mismatch vs the p4_b4 libenzo) —
+# so set both explicitly here.
+( cd "$ENZO" && make "$MPI_MAKE_TARGET" $PREC_TARGETS integers-32 >/dev/null 2>&1 || true )
 
 # Enzo's exact -D defines (so the bridge is ABI-compatible with libenzo).  The
 # mpi flavor's `make -n` runs under use-mpi-yes, so it picks up -DUSE_MPI and the
@@ -148,7 +171,8 @@ objs=()
 for src in Grid_EnzoModulesFixture enzomodules_grid_bridge enzomodules_problem_bridge \
            enzomodules_chemistry_bridge enzomodules_radiation_bridge enzomodules_ppm_grid_bridge \
            enzomodules_timing_init enzomodules_amr_bridge enzomodules_mhdct_bridge \
-           enzomodules_hierarchy_bridge enzomodules_halo_bridge enzomodules_hydro_rk_bridge; do
+           enzomodules_hierarchy_bridge enzomodules_halo_bridge enzomodules_hydro_rk_bridge \
+           enzomodules_mg_bridge; do
   from="$repo/EnzoModules/src"; [ -f "$ENZO/$src.C" ] && from="$ENZO"
   echo "[grid] CXX $src"
   $CXX $DFLAGS $INC $MPI_INC -fPIC -O2 -c "$from/$src.C" -o "/tmp/em_$src.o"
@@ -197,7 +221,8 @@ if [ -f "$WORKER_SRC" ] && "$JULIA" --version >/dev/null 2>&1; then
       "$WORKER_SRC" -o "$WORKER_OUT" -L"$TRAMP/lib" -lmpitrampoline -Wl,-rpath,"$TRAMP/lib" -ldl
   else
     WORKER_OUT="$repo/EnzoModules/deps/enzomodules_worker"
-    echo "[worker] CXX enzomodules_worker (serial)"
+    [ "$FLAVOR" = "f32" ] && WORKER_OUT="${WORKER_OUT}_f32"
+    echo "[worker] CXX $(basename "$WORKER_OUT") (serial)"
     "$CXX" -std=c++17 -O2 -Wall -I"$repo/EnzoModules/src" \
       "$WORKER_SRC" -o "$WORKER_OUT" -ldl
   fi

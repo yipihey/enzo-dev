@@ -2869,6 +2869,12 @@ int zEulerSweep(int j, int NumberOfSubgrids, fluxes *SubgridFluxes[],
     // normally does).
     void EnzoModulesSetAcceleration(int dim, const double *data);
     void EnzoModulesGetAcceleration(int dim, double *data);
+    // Gravity intermediates on the GravitatingMassField mesh (for testing EnzoNG
+    // gravity kernels against Enzo's own source/potential):
+    int  EnzoModulesGMFSize();
+    void EnzoModulesGMFDims(int *dims);
+    void EnzoModulesGetGravitatingMass(double *data);
+    void EnzoModulesGetPotential(double *data);
     // ADR-0003 part B: conservative :julia hydro under AMR. Read/write this
     // grid's BoundaryFluxes (the RefinedFluxes a finer grid carried, and the
     // coarse InitialFluxes a parent records under a subgrid) so a :julia hydro
@@ -2896,10 +2902,17 @@ int zEulerSweep(int j, int NumberOfSubgrids, fluxes *SubgridFluxes[],
     void EnzoModulesSetParticleVelocity(int dim, const double *data);
     void EnzoModulesSetParticleMass(const double *data);
     void EnzoModulesGetParticlePosition(int dim, double *data);
+    void EnzoModulesGetParticleVelocity(int dim, double *data);
+    void EnzoModulesGetParticleMass(double *data);
     // CIC deposit of the grid's own particles -> GravitatingMassFieldParticles.
     int    EnzoModulesDepositParticles();   // returns deposited-field cell count
     void   EnzoModulesGetDepositField(double *data);
     double EnzoModulesDepositCellVolume();
+    // CIC-deposit this grid's particles onto a BaryonField-sized DENSITY field
+    // (incl. ghosts) — the DM source on the SAME mesh as the gas, in one C++ pass
+    // (no per-particle host marshalling).  periodic=1 wraps the active region (the
+    // periodic ROOT); periodic=0 clamps out-of-range deposits (a non-periodic subgrid).
+    void   EnzoModulesDepositParticleDensity(double *data, int periodic);
     // Radiative transfer: fire one photon package through this grid and return
     // its surviving photons / path length (for Beer-Lambert verification).
     int    EnzoModulesRaytrace(double energy, double photons, double dtphoton,
