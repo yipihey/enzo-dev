@@ -1,65 +1,60 @@
 # ── KROME Fortran rate-expression → Julia closure ─────────────────────────────
-# KROME rate strings are Fortran math in a fixed set of temperature variables
-# (Tgas in K, Te in eV, lnTe, invTe, …). We translate the Fortran surface syntax
-# to Julia, prepend the KROME variable preamble, and `eval` once at build time
-# into a `Tgas -> k` closure (host-side codegen, like `calc_rates` building a
-# table). The closures are then tabulated by `to_generic`.
+# KROME rate strings are Fortran math in temperature variables (Tgas, Te, lnTe,
+# …) and, for the richer networks, in the per-cell total density (`ntot` /
+# `Hnuclei`) and in `@var:` intermediate variables (e.g. the kl/kh/ncr/a
+# density-bridging helpers for collisional dissociation). We translate the Fortran
+# surface syntax to Julia, prepend a preamble defining the temperature variables,
+# the `@var:` assignments (in order), and `@common:` user variables (defaulted),
+# then `eval` once at build time into a `(Tgas, ntot) -> k` closure.
 #
-# Supported variables match KROME's `krome_constants` / rate preamble. Reactions
-# whose rate references unsupported symbols (e.g. local densities `n(...)`, dust,
-# user functions) are flagged by `compile_rate` returning `nothing` so the parser
-# can skip them rather than miscompile.
+# Reactions whose rate (or whose @var dependencies) reference symbols we don't
+# provide — explicit per-species densities `n(idx_X)`, dust `Tdust` tables,
+# `auto` reverse rates — return `nothing` from `compile_rate` so the parser skips
+# them. Density dependence is detected automatically and flagged.
 
-# KROME temperature variables available to every rate expression.
-const _KROME_PREAMBLE = quote
-    Te      = Tgas * 8.617343e-5          # K → eV
-    lnTe    = log(Te)
-    invTe   = 1.0 / Te
-    T32     = Tgas / 300.0
-    invT    = 1.0 / Tgas
-    invsqrT = 1.0 / sqrt(Tgas)
-    sqrTgas = sqrt(Tgas)
-    lnTgas  = log(Tgas)
-    logTgas = log10(Tgas)
-    logTe   = log10(Te)
+# base temperature variables (KROME's rate preamble), Julia source.
+const _STD_PREAMBLE = quote
+    Te=Tgas*8.617343e-5; lnTe=log(Te); invTe=1.0/Te; T=Tgas; invT=1.0/Tgas
+    T32=Tgas/300.0; invsqrT=1.0/sqrt(Tgas); sqrTgas=sqrt(Tgas); sqrT=sqrt(Tgas)
+    lnTgas=log(Tgas); logT=log10(Tgas); logTgas=log10(Tgas); logTe=log10(Te)
+    Hnuclei=ntot
 end
 
-# symbols the expression is allowed to reference (besides Tgas + the preamble vars
-# + Base math). Anything else ⇒ unsupported (density-dependent / dust / user rate).
-const _ALLOWED = Set([:Tgas, :Te, :lnTe, :invTe, :T32, :invT, :invsqrT, :sqrTgas,
-                      :lnTgas, :logTgas, :logTe,
-                      :exp, :log, :log10, :sqrt, :abs, :max, :min, :sin, :cos,
-                      :tanh, :+, :-, :*, :/, :^, :Tgas])
+# math intrinsics + variables the compiled rate may reference for free.
+const _MATH = Set([:exp,:log,:log10,:sqrt,:abs,:max,:min,:sin,:cos,:tanh,:atan,
+                   :+,:-,:*,:/,:^,:float])
+const _BASEVARS = Set([:Tgas,:ntot,:Hnuclei,:Te,:lnTe,:invTe,:T,:invT,:T32,
+                       :invsqrT,:sqrTgas,:sqrT,:lnTgas,:logT,:logTgas,:logTe,
+                       :Av,:av,:Tdust])
 
 """
     translate_fortran(s) -> String
 
 Rewrite a Fortran rate expression to Julia source: `d`/`D` exponent literals
-(`3.92d-13` → `3.92e-13`, `1.d0` → `1.0e0`), `**` → `^`, and the Fortran intrinsics
-`dexp/dlog/dlog10/dsqrt/dabs/dmax1/dmin1` → their Julia names.
+(`3.92d-13` → `3.92e-13`), `**` → `^`, the `dexp/dlog/dsqrt/…` intrinsics, and
+`get_Hnuclei(n(:))` → `ntot`.
 """
 function translate_fortran(s::AbstractString)
     t = String(strip(s))
-    # Fortran double-precision intrinsics → Julia
-    for (a, b) in ("dexp" => "exp", "dlog10" => "log10", "dlog" => "log",
-                   "dsqrt" => "sqrt", "dabs" => "abs", "dmax1" => "max",
-                   "dmin1" => "min", "dble" => "float")
+    t = replace(t, r"get_Hnuclei\s*\(\s*n\(:\)\s*\)" => "ntot")
+    for (a, b) in ("dexp"=>"exp","dlog10"=>"log10","dlog"=>"log","dsqrt"=>"sqrt",
+                   "dabs"=>"abs","dmax1"=>"max","dmin1"=>"min","dble"=>"float")
         t = replace(t, a => b)
     end
     t = replace(t, "**" => "^")
-    # d/D exponent markers in numeric literals: <digit-or-dot> d <sign?digit> → e
+    # Fortran allows a bare trailing decimal point (`1.-a` = `1.0 - a`, `1.)`),
+    # which Julia mis-parses; complete it to `1.0` unless a digit/exponent follows.
+    t = replace(t, r"(\d)\.(?![0-9dDeE])" => s"\1.0")
     t = replace(t, r"([0-9.])[dD]([+-]?[0-9])" => s"\1e\2")
     return t
 end
 
-# collect the bare symbols referenced in a parsed expression
 function _symbols!(set, ex)
     if ex isa Symbol
         push!(set, ex)
     elseif ex isa Expr
         if ex.head === :call
-            push!(set, ex.args[1])
-            for a in ex.args[2:end]; _symbols!(set, a); end
+            push!(set, ex.args[1]); for a in ex.args[2:end]; _symbols!(set, a); end
         else
             for a in ex.args; _symbols!(set, a); end
         end
@@ -68,28 +63,44 @@ function _symbols!(set, ex)
 end
 
 """
-    compile_rate(s) -> (Tgas -> k)::Function or nothing
+    compile_rate(s; vars=Pair[], commons=Symbol[]) -> ((Tgas,ntot)->k, density_dep) or nothing
 
-Compile a KROME rate string into a `Tgas -> rate` closure (cgs). Returns `nothing`
-when the expression references symbols outside the supported temperature set
-(density/dust/user-dependent rates), so callers can skip those reactions cleanly.
+Compile a KROME rate string into a `(Tgas, ntot) -> rate` closure (cgs) plus a
+`Bool` flag of whether it depends on density. `vars` is the ordered list of
+`@var:` `name => expr` definitions; `commons` the `@common:` user variables
+(injected as `0.0`). Returns `nothing` if the rate references unsupported symbols.
 """
-function compile_rate(s::AbstractString)
+function compile_rate(s::AbstractString; vars::Vector{<:Pair} = Pair{Symbol,String}[],
+                      commons::Vector{Symbol} = Symbol[])
     jl = translate_fortran(s)
-    ex = try
-        Meta.parse(jl)
-    catch
+    rex = try Meta.parse(jl) catch; return nothing end
+
+    # assemble the @var assignments (translated, in order) + collect their symbols
+    varnames = Set{Symbol}(); varassigns = Expr[]; allsyms = Set{Symbol}()
+    for (nm, expr) in vars
+        vex = try Meta.parse(translate_fortran(expr)) catch; return nothing end
+        push!(varassigns, Expr(:(=), nm, vex)); push!(varnames, nm)
+        _symbols!(allsyms, vex)
+    end
+    _symbols!(allsyms, rex)
+
+    allowed = union(_MATH, _BASEVARS, varnames, Set(commons))
+    for sym in allsyms
+        sym in allowed && continue
         return nothing
     end
-    syms = _symbols!(Set{Symbol}(), ex)
-    for sym in syms
-        sym in _ALLOWED && continue
-        return nothing            # unsupported reference → skip this reaction
+
+    commonpre = Expr(:block, (Expr(:(=), c, 0.0) for c in commons)...,
+                     Expr(:(=), :Av, 0.0), Expr(:(=), :av, 0.0), Expr(:(=), :Tdust, :Tgas))
+    body = Expr(:block, _STD_PREAMBLE, commonpre, varassigns..., rex)
+    raw  = eval(Expr(:->, Expr(:tuple, :Tgas, :ntot), body))
+    f    = (Tgas, ntot) -> Base.invokelatest(raw, Tgas, ntot)
+
+    dd = try
+        a = f(500.0, 1.0); b = f(500.0, 1.0e8)
+        !(isapprox(a, b; rtol = 1e-12) || (a == 0 && b == 0))
+    catch
+        false
     end
-    body = Expr(:block, _KROME_PREAMBLE, ex)
-    raw = eval(Expr(:->, :Tgas, body))   # host-side codegen, once per reaction
-    # Wrap so calls dispatch through invokelatest: the closure is eval'd at a
-    # newer world age than its callers, so direct calls would hit a world-age
-    # error otherwise. The wrapper itself is an ordinary runtime closure.
-    return Tgas -> Base.invokelatest(raw, Tgas)
+    return (f, dd)
 end

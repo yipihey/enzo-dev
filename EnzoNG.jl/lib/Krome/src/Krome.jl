@@ -27,7 +27,7 @@ module Krome
 using ChemistryKernels
 using KernelAbstractions
 
-export KromeNetwork, KromeReaction, parse_krome, to_generic
+export KromeNetwork, KromeReaction, parse_krome, to_generic, direct_step!
 export krome_network_path, list_krome_networks, compile_rate
 
 include("expr.jl")    # Fortran rate-expression → Julia closure

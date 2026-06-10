@@ -14,11 +14,15 @@
 # tokens that are NOT tracked species (photons, cosmic rays, blanks)
 const _DUMMY = Set(["", "G", "GAMMA", "Γ", "CR", "CRP", "CRPHOT", "PHOTON", "DUST"])
 
-"One reaction: real-species reactant/product indices + a compiled `Tgas→k` rate."
+"""
+One reaction: real-species reactant/product indices + a compiled `(Tgas,ntot)→k`
+rate closure and a `density_dep` flag (true if the rate varies with `ntot`).
+"""
 struct KromeReaction
     reactants::Vector{Int}
     products::Vector{Int}
     rate::Function
+    density_dep::Bool
     raw::String
 end
 
@@ -66,6 +70,8 @@ function parse_krome(path::AbstractString)
     species = String[]; index = Dict{String,Int}()
     reactions = KromeReaction[]; skipped = 0
     fmt = copy(_DEFAULT_FORMAT)
+    vars = Pair{Symbol,String}[]      # accumulated @var: name => expr (in order)
+    commons = Symbol[]                # @common: user variables
 
     sid(tok) = begin
         s = uppercase(strip(tok))
@@ -80,8 +86,22 @@ function parse_krome(path::AbstractString)
         if startswith(line, "@format:")
             fmt = strip.(split(line[length("@format:")+1:end], ","))
             continue
+        elseif startswith(line, "@var:")
+            body = strip(line[length("@var:")+1:end])
+            eq = findfirst('=', body)
+            if eq !== nothing
+                nm = Symbol(strip(body[1:eq-1])); ex = strip(body[eq+1:end])
+                # later redefinitions of the same name win (drop the earlier)
+                filter!(p -> p.first != nm, vars); push!(vars, nm => String(ex))
+            end
+            continue
+        elseif startswith(line, "@common:")
+            for c in strip.(split(line[length("@common:")+1:end], ","))
+                isempty(c) || push!(commons, Symbol(c))
+            end
+            continue
         end
-        startswith(line, "@") && continue          # other directives: ignored
+        startswith(line, "@") && continue          # @noTabNext, @ev, … : ignored
         cols = strip.(split(line, ","))
         length(cols) < length(fmt) && continue      # malformed / continuation
         reac = Int[]; prod = Int[]; tmin = "NONE"; tmax = "NONE"; rate = ""
@@ -99,14 +119,15 @@ function parse_krome(path::AbstractString)
             end
         end
         isempty(rate) && (skipped += 1; continue)
-        base = compile_rate(rate)
-        base === nothing && (skipped += 1; continue)
+        compiled = compile_rate(rate; vars = vars, commons = commons)
+        compiled === nothing && (skipped += 1; continue)
+        base, dd = compiled
         lo1, hi1 = _parse_limit(tmin, :Tmin)
         lo2, hi2 = _parse_limit(tmax, :Tmax)
         lo = max(lo1, lo2); hi = min(hi1, hi2)
         gated = (lo == -Inf && hi == Inf) ? base :
-                (Tgas -> (lo ≤ Tgas ≤ hi) ? base(Tgas) : 0.0)
-        push!(reactions, KromeReaction(reac, prod, gated, rate))
+                ((Tgas, ntot) -> (lo ≤ Tgas ≤ hi) ? base(Tgas, ntot) : 0.0)
+        push!(reactions, KromeReaction(reac, prod, gated, dd, rate))
     end
     return KromeNetwork(species, index, reactions, skipped)
 end
