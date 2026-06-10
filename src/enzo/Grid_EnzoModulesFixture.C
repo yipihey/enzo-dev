@@ -163,6 +163,18 @@ void grid::EnzoModulesGetPotential(double *data)
     data[i] = (PotentialField == NULL) ? 0.0 : (double)PotentialField[i];
 }
 
+/* Inverse of the getter: a :julia gravity slot writes its solved potential here,
+ * then Enzo's own ComputeAccelerations differences it (the slot swaps ONLY the
+ * Poisson solve; deposit and force differencing stay Enzo's). */
+void grid::EnzoModulesSetPotential(const double *data)
+{
+  int size = this->EnzoModulesGMFSize();
+  if (PotentialField == NULL)
+    PotentialField = new float[size];
+  for (int i = 0; i < size; i++)
+    PotentialField[i] = (float)data[i];
+}
+
 /* ---- ADR-0003 part B: BoundaryFluxes for conservative :julia AMR -------- */
 
 /* This grid's physical edges per dim (length-3 outputs) — so a :julia AMR slot

@@ -2875,6 +2875,9 @@ int zEulerSweep(int j, int NumberOfSubgrids, fluxes *SubgridFluxes[],
     void EnzoModulesGMFDims(int *dims);
     void EnzoModulesGetGravitatingMass(double *data);
     void EnzoModulesGetPotential(double *data);
+    // Write the PotentialField (a :julia gravity slot's solved phi) so Enzo's own
+    // ComputeAccelerations/CopyPotentialToBaryonField difference OUR solution.
+    void EnzoModulesSetPotential(const double *data);
     // ADR-0003 part B: conservative :julia hydro under AMR. Read/write this
     // grid's BoundaryFluxes (the RefinedFluxes a finer grid carried, and the
     // coarse InitialFluxes a parent records under a subgrid) so a :julia hydro

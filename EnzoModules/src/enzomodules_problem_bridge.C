@@ -341,6 +341,8 @@ void enzomodules_problem_get_gravitating_mass(void *h, int gi, double *out)
 { ((EMProblem *)h)->grids[gi]->EnzoModulesGetGravitatingMass(out); }
 void enzomodules_problem_get_potential(void *h, int gi, double *out)
 { ((EMProblem *)h)->grids[gi]->EnzoModulesGetPotential(out); }
+void enzomodules_problem_set_potential(void *h, int gi, const double *in)
+{ ((EMProblem *)h)->grids[gi]->EnzoModulesSetPotential(in); }
 
 /* ---- ADR-0003 part B: conservative :julia hydro under AMR ---------------
  * Bridge for writing EnzoNG's recorded face fluxes into Enzo's flux registers,
@@ -743,6 +745,25 @@ int enzomodules_session_gravity(void *h, int level)
   }
   delete[] Grids;
   return rc;
+}
+
+/* Post-solve only: per-grid ComputeAccelerations + CopyPotentialToBaryonField +
+ * external — the back half of session_gravity, for a :julia gravity slot that
+ * has just written its solved PotentialField (set_potential).  Enzo's own
+ * differencing turns OUR phi into baryon AND particle accelerations. */
+int enzomodules_session_gravity_post(void *h, int level)
+{
+  EMProblem *p = (EMProblem *)h;
+  HierarchyEntry **Grids;
+  int n = GenerateGridArray(p->LevelArray, level, &Grids);
+  for (int i = 0; i < n; i++) {
+    grid *g = Grids[i]->GridData;
+    g->ComputeAccelerations(level);
+    g->CopyPotentialToBaryonField();
+    g->ComputeAccelerationFieldExternal();
+  }
+  delete[] Grids;
+  return 0;
 }
 
 /* Deposit-only: populate the GravitatingMassField (PrepareDensityField) WITHOUT the
