@@ -373,7 +373,13 @@ int grid::NestedCosmologySimulationInitializeGrid(
       FieldType[NumberOfBaryonFields++] = Phi_pField;
     }
   }
-    if (MultiSpecies) {
+    if (ReducedChemistry) {
+      /* v2026 reduced network: allocate ONLY HII and H2I; De, HI, HeI, HeII,
+         HeIII, HM, H2II are reconstructed inside Grackle every step. */
+      FieldType[HIINum   = NumberOfBaryonFields++] = HIIDensity;
+      FieldType[H2INum   = NumberOfBaryonFields++] = H2IDensity;
+    }
+    else if (MultiSpecies) {
       FieldType[DeNum    = NumberOfBaryonFields++] = ElectronDensity;
       FieldType[HINum    = NumberOfBaryonFields++] = HIDensity;
       FieldType[HIINum   = NumberOfBaryonFields++] = HIIDensity;
@@ -555,14 +561,27 @@ int grid::NestedCosmologySimulationInitializeGrid(
       
       // If using multi-species, set the fields
  
-      if (MultiSpecies && ReadData) {
+      if (ReducedChemistry && ReadData) {
+	/* v2026 reduced network: only HII and H2I are stored/initialized. */
 	for (i = 0; i < size; i++) {
- 
 	  BaryonField[HIINum][i] = CosmologySimulationInitialFractionHII *
 	    CoolData.HydrogenFractionByMass * BaryonField[0][i] *
 	    sqrt(OmegaMatterNow)/
 	    (CosmologySimulationOmegaBaryonNow*HubbleConstantNow);
- 
+	  BaryonField[H2INum][i] = CosmologySimulationInitialFractionH2I*
+	    BaryonField[0][i]*CoolData.HydrogenFractionByMass*POW(301.0,5.1)*
+	    POW(OmegaMatterNow, float(1.5))/
+	    CosmologySimulationOmegaBaryonNow/HubbleConstantNow*2.0;
+	}
+      }
+      else if (MultiSpecies && ReadData) {
+	for (i = 0; i < size; i++) {
+
+	  BaryonField[HIINum][i] = CosmologySimulationInitialFractionHII *
+	    CoolData.HydrogenFractionByMass * BaryonField[0][i] *
+	    sqrt(OmegaMatterNow)/
+	    (CosmologySimulationOmegaBaryonNow*HubbleConstantNow);
+
 	  BaryonField[HeIINum][i] = CosmologySimulationInitialFractionHeII*
 	    BaryonField[0][i] * 4.0 * (1.0-CoolData.HydrogenFractionByMass);
 	  BaryonField[HeIIINum][i] = CosmologySimulationInitialFractionHeIII*
