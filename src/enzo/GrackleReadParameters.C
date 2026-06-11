@@ -124,6 +124,18 @@ int GrackleReadParameters(FILE *fptr, FLOAT InitTime)
                     &grackle_data->self_shielding_method);
     ret += sscanf(line, "H2_self_shielding = %d",
                     &grackle_data->H2_self_shielding);
+    ret += sscanf(line, "cmb_dissociation = %d",
+                    &grackle_data->cmb_dissociation);
+    ret += sscanf(line, "equilibrium_h2_intermediates = %d",
+                    &grackle_data->equilibrium_h2_intermediates);
+    ret += sscanf(line, "cmb_recombination = %d",
+                    &grackle_data->cmb_recombination);
+    ret += sscanf(line, "cosmology_hubble_constant_now = %lf",
+                    &grackle_data->cosmology_hubble_constant_now);
+    ret += sscanf(line, "cosmology_omega_matter_now = %lf",
+                    &grackle_data->cosmology_omega_matter_now);
+    ret += sscanf(line, "cosmology_omega_lambda_now = %lf",
+                    &grackle_data->cosmology_omega_lambda_now);
 
     if (sscanf(line, "grackle_data_file = %s", dummy) == 1) {
       grackle_data->grackle_data_file = dummy;
@@ -237,6 +249,19 @@ int GrackleReadParameters(FILE *fptr, FLOAT InitTime)
   grackle_units.time_units           = (double) TimeUnits;
   grackle_units.velocity_units       = (double) VelocityUnits;
   grackle_units.a_value              = (double) a_value;
+
+  // Auto-wire the v2026 recfast-matched recombination cosmology from Enzo's own
+  // CosmologyParameters (so the user need not duplicate them).  Only fill values
+  // the parameter file left at the default 0, so an explicit grackle param still
+  // wins.  HubbleConstantNow is in units of 100 km/s/Mpc -> *100 for km/s/Mpc.
+  if (grackle_data->cmb_recombination > 0 && ComovingCoordinates) {
+    if (grackle_data->cosmology_hubble_constant_now == 0.0)
+      grackle_data->cosmology_hubble_constant_now = (double) (HubbleConstantNow * 100.0);
+    if (grackle_data->cosmology_omega_matter_now == 0.0)
+      grackle_data->cosmology_omega_matter_now    = (double) OmegaMatterNow;
+    if (grackle_data->cosmology_omega_lambda_now == 0.0)
+      grackle_data->cosmology_omega_lambda_now    = (double) OmegaLambdaNow;
+  }
 
   // Initialize chemistry structure.
   if (initialize_chemistry_data(&grackle_units) == FAIL) {

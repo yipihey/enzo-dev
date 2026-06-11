@@ -16,6 +16,7 @@
 // Solve the hydro equations with the solver, saving the subgrid fluxes
 //
 
+#include "preincludes.h"
 #include <stdio.h>
 #include "ErrorExceptions.h"
 #include "EnzoTiming.h"
@@ -92,18 +93,39 @@ int grid::SolveHydroEquations(int CycleNumber, int NumberOfSubgrids,
     // use different color fields for RadiativeTransferFLD problems
     //   first, the standard Enzo color field advection
     if (MultiSpecies > 0 && RadiativeTransferFLD != 2) {
-      NumberOfColours = 6 + 3*(MultiSpecies-1);
+      int nColourBlock = 6 + 3*(MultiSpecies-1);
 
       if ((ColourNum =
            FindField(ElectronDensity, FieldType, NumberOfBaryonFields)) < 0) {
         ENZO_FAIL("Could not find ElectronDensity.");
       }
 
+      /* The species fields are contiguous starting at ElectronDensity, in the
+         canonical order De,HI,HII,HeI,HeII,HeIII,[HM,H2I,H2II],[DI,DII,HDI].
+         In the v2026 reduced network (grackle equilibrium_h2_intermediates),
+         H- (offset 6) and H2+ (offset 8) are algebraic equilibrium functions
+         of the local state that grackle recomputes every step, so transporting
+         them with the hydro is redundant work — skip them as colour vars.
+         The fields stay allocated and grackle still fills them (diagnostics);
+         only the advection of those two scalars is dropped. */
+
+      int skipHM = -1, skipH2II = -1;
+#ifdef USE_GRACKLE
+      if (use_grackle == TRUE && grackle_data != NULL &&
+          grackle_data->equilibrium_h2_intermediates > 0 && MultiSpecies > 1) {
+        skipHM   = 6;   /* HMDensity   offset from ElectronDensity */
+        skipH2II = 8;   /* H2IIDensity offset from ElectronDensity */
+      }
+#endif
+
       /* Generate an array of field numbers corresponding to the colour fields
 	 (here assumed to start with ElectronDensity and continue in order). */
 
-      for (i = 0; i < NumberOfColours; i++)
-        colnum[i] = ColourNum+i;
+      NumberOfColours = 0;
+      for (i = 0; i < nColourBlock; i++) {
+        if (i == skipHM || i == skipH2II) continue;
+        colnum[NumberOfColours++] = ColourNum+i;
+      }
 
     }
     // second, the color field advection if using RadiativeTransferFLD for 
