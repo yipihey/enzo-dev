@@ -102,19 +102,34 @@ int grid::SolveHydroEquations(int CycleNumber, int NumberOfSubgrids,
 
       /* The species fields are contiguous starting at ElectronDensity, in the
          canonical order De,HI,HII,HeI,HeII,HeIII,[HM,H2I,H2II],[DI,DII,HDI].
-         In the v2026 reduced network (grackle equilibrium_h2_intermediates),
-         H- (offset 6) and H2+ (offset 8) are algebraic equilibrium functions
+         In the v2026 reduced networks, several of these are algebraic functions
          of the local state that grackle recomputes every step, so transporting
-         them with the hydro is redundant work — skip them as colour vars.
-         The fields stay allocated and grackle still fills them (diagnostics);
-         only the advection of those two scalars is dropped. */
+         them with the hydro is redundant — skip them as colour vars.  The fields
+         stay allocated and grackle still fills them (diagnostics); only the
+         advection is dropped.
+           equilibrium_h2_intermediates: H- (offset 6) and H2+ (offset 8) are
+             algebraic equilibrium intermediaries.
+           neutral_helium: helium is forced neutral and the electron density
+             equals the proton density, so De (0), HeI (3), HeII (4), HeIII (5)
+             are all reconstructed by grackle; HI (1) is reconstructed from
+             rho-HII-H2I.  With both flags the only advected colour fields are
+             HII (2) and H2I (7) -- a large memory saving. */
 
-      int skipHM = -1, skipH2II = -1;
+      int skip[16];
+      for (i = 0; i < 16; i++) skip[i] = 0;
 #ifdef USE_GRACKLE
-      if (use_grackle == TRUE && grackle_data != NULL &&
-          grackle_data->equilibrium_h2_intermediates > 0 && MultiSpecies > 1) {
-        skipHM   = 6;   /* HMDensity   offset from ElectronDensity */
-        skipH2II = 8;   /* H2IIDensity offset from ElectronDensity */
+      if (use_grackle == TRUE && grackle_data != NULL && MultiSpecies > 1) {
+        if (grackle_data->equilibrium_h2_intermediates > 0) {
+          skip[6] = 1;   /* HM   */
+          skip[8] = 1;   /* H2II */
+        }
+        if (grackle_data->neutral_helium > 0) {
+          skip[0] = 1;   /* De    = HII (n_e=n_HII)          */
+          skip[1] = 1;   /* HI    = X_H*rho - HII - H2I      */
+          skip[3] = 1;   /* HeI   = (1-X_H)*rho              */
+          skip[4] = 1;   /* HeII  = 0                        */
+          skip[5] = 1;   /* HeIII = 0                        */
+        }
       }
 #endif
 
@@ -123,7 +138,7 @@ int grid::SolveHydroEquations(int CycleNumber, int NumberOfSubgrids,
 
       NumberOfColours = 0;
       for (i = 0; i < nColourBlock; i++) {
-        if (i == skipHM || i == skipH2II) continue;
+        if (skip[i]) continue;
         colnum[NumberOfColours++] = ColourNum+i;
       }
 

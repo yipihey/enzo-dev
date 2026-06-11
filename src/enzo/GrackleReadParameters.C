@@ -128,6 +128,8 @@ int GrackleReadParameters(FILE *fptr, FLOAT InitTime)
                     &grackle_data->cmb_dissociation);
     ret += sscanf(line, "equilibrium_h2_intermediates = %d",
                     &grackle_data->equilibrium_h2_intermediates);
+    ret += sscanf(line, "neutral_helium = %d",
+                    &grackle_data->neutral_helium);
     ret += sscanf(line, "cmb_recombination = %d",
                     &grackle_data->cmb_recombination);
     ret += sscanf(line, "cosmology_hubble_constant_now = %lf",
