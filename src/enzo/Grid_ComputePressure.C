@@ -255,7 +255,12 @@ int grid::ComputePressure(FLOAT time, float *pressure,
  
     int DeNum, HINum, HIINum, HeINum, HeIINum, HeIIINum, HMNum, H2INum,
       H2IINum, DINum, DIINum, HDINum;
-    if (IdentifySpeciesFields(DeNum, HINum, HIINum, HeINum, HeIINum, HeIIINum,
+    float fhmass = CoolData.HydrogenFractionByMass;
+    if (ReducedChemistry) {
+      HIINum = FindField(HIIDensity, FieldType, NumberOfBaryonFields);
+      H2INum = FindField(H2IDensity, FieldType, NumberOfBaryonFields);
+    }
+    else if (IdentifySpeciesFields(DeNum, HINum, HIINum, HeINum, HeIINum, HeIIINum,
 		      HMNum, H2INum, H2IINum, DINum, DIINum, HDINum) == FAIL) {
       ENZO_FAIL("Error in grid->IdentifySpeciesFields.\n");
     }
@@ -269,13 +274,21 @@ int grid::ComputePressure(FLOAT time, float *pressure,
  
     for (i = 0; i < size; i++) {
  
+      if (ReducedChemistry) {
+	/* He neutral, n_e=n_HII, HI=X_H*rho-HII-H2I  ->
+	     n(non-H2) = (0.25+0.75*X_H)*rho + n_HII - n_H2I,  nH2 = 0.5*n_H2I */
+	number_density = (0.25 + 0.75*fhmass)*BaryonField[DensNum][i]
+	  + BaryonField[HIINum][i] - BaryonField[H2INum][i];
+	nH2 = 0.5*BaryonField[H2INum][i];
+      } else {
       number_density =
 	  0.25*(BaryonField[HeINum][i]  + BaryonField[HeIINum][i] +
 		BaryonField[HeIIINum][i]                        ) +
 	        BaryonField[HINum][i]   + BaryonField[HIINum][i]  +
                 BaryonField[DeNum][i];
- 
+
       nH2 = 0.5*(BaryonField[H2INum][i]  + BaryonField[H2IINum][i]);
+      }
  
       /* First, approximate temperature. */
  

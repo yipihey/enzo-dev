@@ -92,7 +92,22 @@ int grid::SolveHydroEquations(int CycleNumber, int NumberOfSubgrids,
 
     // use different color fields for RadiativeTransferFLD problems
     //   first, the standard Enzo color field advection
-    if (MultiSpecies > 0 && RadiativeTransferFLD != 2) {
+    if (ReducedChemistry && RadiativeTransferFLD != 2) {
+
+      /* v2026 reduced network: only HII and H2I are allocated; De, HI, HeI,
+         HeII, HeIII, HM, H2II are reconstructed inside grackle every step and
+         are never stored, so advect just the two surviving scalars. */
+
+      NumberOfColours = 0;
+      if ((ColourNum =
+           FindField(HIIDensity, FieldType, NumberOfBaryonFields)) >= 0)
+        colnum[NumberOfColours++] = ColourNum;
+      if ((ColourNum =
+           FindField(H2IDensity, FieldType, NumberOfBaryonFields)) >= 0)
+        colnum[NumberOfColours++] = ColourNum;
+
+    }
+    else if (MultiSpecies > 0 && RadiativeTransferFLD != 2) {
       int nColourBlock = 6 + 3*(MultiSpecies-1);
 
       if ((ColourNum =
@@ -102,18 +117,13 @@ int grid::SolveHydroEquations(int CycleNumber, int NumberOfSubgrids,
 
       /* The species fields are contiguous starting at ElectronDensity, in the
          canonical order De,HI,HII,HeI,HeII,HeIII,[HM,H2I,H2II],[DI,DII,HDI].
-         In the v2026 reduced networks, several of these are algebraic functions
-         of the local state that grackle recomputes every step, so transporting
-         them with the hydro is redundant — skip them as colour vars.  The fields
-         stay allocated and grackle still fills them (diagnostics); only the
-         advection is dropped.
-           equilibrium_h2_intermediates: H- (offset 6) and H2+ (offset 8) are
-             algebraic equilibrium intermediaries.
-           neutral_helium: helium is forced neutral and the electron density
-             equals the proton density, so De (0), HeI (3), HeII (4), HeIII (5)
-             are all reconstructed by grackle; HI (1) is reconstructed from
-             rho-HII-H2I.  With both flags the only advected colour fields are
-             HII (2) and H2I (7) -- a large memory saving. */
+         When only ONE of the v2026 reduced-network flags is set (so the fields
+         are still allocated), skip the algebraic ones from advection: grackle
+         recomputes them every step, so transporting them is redundant.
+           equilibrium_h2_intermediates: H- (offset 6) and H2+ (offset 8).
+           neutral_helium: De (0), HI (1), HeI (3), HeII (4), HeIII (5).
+         (With BOTH flags the fields are not allocated at all -- handled by the
+         ReducedChemistry branch above.) */
 
       int skip[16];
       for (i = 0; i < 16; i++) skip[i] = 0;
@@ -124,11 +134,11 @@ int grid::SolveHydroEquations(int CycleNumber, int NumberOfSubgrids,
           skip[8] = 1;   /* H2II */
         }
         if (grackle_data->neutral_helium > 0) {
-          skip[0] = 1;   /* De    = HII (n_e=n_HII)          */
-          skip[1] = 1;   /* HI    = X_H*rho - HII - H2I      */
-          skip[3] = 1;   /* HeI   = (1-X_H)*rho              */
-          skip[4] = 1;   /* HeII  = 0                        */
-          skip[5] = 1;   /* HeIII = 0                        */
+          skip[0] = 1;   /* De    */
+          skip[1] = 1;   /* HI    */
+          skip[3] = 1;   /* HeI   */
+          skip[4] = 1;   /* HeII  */
+          skip[5] = 1;   /* HeIII */
         }
       }
 #endif

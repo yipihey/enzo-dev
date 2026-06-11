@@ -53,15 +53,20 @@ int grid::ComputeGammaField(float *GammaField)
  
   else {
  
-    /* Find Multi-species fields. */
- 
-    if (IdentifySpeciesFields(DeNum, HINum, HIINum, HeINum, HeIINum, HeIIINum,
+    /* Find Multi-species fields (reduced network stores only HII and H2I). */
+
+    float fhgam = CoolData.HydrogenFractionByMass;
+    if (ReducedChemistry) {
+      HIINum = FindField(HIIDensity, FieldType, NumberOfBaryonFields);
+      H2INum = FindField(H2IDensity, FieldType, NumberOfBaryonFields);
+    }
+    else if (IdentifySpeciesFields(DeNum, HINum, HIINum, HeINum, HeIINum, HeIIINum,
 		      HMNum, H2INum, H2IINum, DINum, DIINum, HDINum) == FAIL) {
       ENZO_FAIL("Error in grid->IdentifySpeciesFields.\n");
     }
- 
+
     /* Compute the temperature. */
- 
+
     this->ComputeTemperatureField(GammaField);
  
     /* Compute Gamma with molecular Hydrogen formula from Omukau \& Nishi
@@ -72,13 +77,19 @@ int grid::ComputeGammaField(float *GammaField)
  
       /* Compute relative number abundence of molecular hydrogen. */
  
+      if (ReducedChemistry) {
+	number_density = (0.25 + 0.75*fhgam)*BaryonField[0][i]
+	  + BaryonField[HIINum][i] - BaryonField[H2INum][i];
+	nH2 = 0.5*BaryonField[H2INum][i];
+      } else {
       number_density =
 	0.25*(BaryonField[HeINum][i]  + BaryonField[HeIINum][i] +
 	      BaryonField[HeIIINum][i]                        ) +
               BaryonField[HINum][i]   + BaryonField[HIINum][i]  +
               BaryonField[DeNum][i];
- 
+
       nH2 = 0.5*(BaryonField[H2INum][i]  + BaryonField[H2IINum][i]);
+      }
  
       /* Only do full computation if there is a reasonable amount of H2.
          The second term in GammaH2Inverse accounts for the vibrational

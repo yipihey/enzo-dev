@@ -422,6 +422,11 @@ EXTERN float SGScoeffSSemf;
 /* Multi-species rate equation flag and associated data. */
 
 EXTERN int MultiSpecies;
+/* v2026 reduced primordial chemistry: when Grackle runs with both
+   neutral_helium and equilibrium_h2_intermediates, only HII and H2I are
+   allocated as BaryonFields; De, HI, HeI, HeII, HeIII, HM, H2II are NOT stored
+   (Grackle reconstructs them every step).  Set in GrackleReadParameters. */
+EXTERN int ReducedChemistry;
 EXTERN int NoMultiSpeciesButColors;
 EXTERN int ThreeBodyRate;
 EXTERN RateDataType RateData;

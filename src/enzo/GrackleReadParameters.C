@@ -265,6 +265,16 @@ int GrackleReadParameters(FILE *fptr, FLOAT InitTime)
       grackle_data->cosmology_omega_lambda_now    = (double) OmegaLambdaNow;
   }
 
+  // v2026 reduced primordial chemistry: with both neutral_helium and
+  // equilibrium_h2_intermediates, only HII and H2I are allocated/advected; De,
+  // HI, HeI, HeII, HeIII, HM, H2II are reconstructed inside Grackle every step.
+  ReducedChemistry = (grackle_data->use_grackle == TRUE &&
+                      grackle_data->neutral_helium > 0 &&
+                      grackle_data->equilibrium_h2_intermediates > 0) ? TRUE : FALSE;
+  if (ReducedChemistry && MultiSpecies != 2)
+    ENZO_FAIL("ReducedChemistry (neutral_helium + equilibrium_h2_intermediates) "
+              "requires MultiSpecies = 2.\n");
+
   // Initialize chemistry structure.
   if (initialize_chemistry_data(&grackle_units) == FAIL) {
     ENZO_FAIL("Error in Grackle initialize_chemistry_data.\n");

@@ -141,10 +141,28 @@ int grid::ComputeTemperatureField(float *temperature,int IncludeCRs)
       temperature[i] = max((TemperatureUnits*temperature[i]*mol_weight
 		         /max(BaryonField[DensNum][i], tiny_number)),
 			 min_temperature);
+  else if (ReducedChemistry) {
+
+    /* v2026 reduced network: only HII and H2I are stored, He is neutral and
+       n_e=n_HII, so the number density is analytic:
+         n = (0.25 + 0.75*X_H)*rho + n_HII - 0.5*n_H2I  (in rho/mh units). */
+
+    float fh = CoolData.HydrogenFractionByMass;
+    int rHIINum = FindField(HIIDensity, FieldType, NumberOfBaryonFields);
+    int rH2INum = FindField(H2IDensity, FieldType, NumberOfBaryonFields);
+    for (i = 0; i < size; i++) {
+      number_density = (0.25 + 0.75*fh)*BaryonField[DensNum][i]
+	+ BaryonField[rHIINum][i] - 0.5*BaryonField[rH2INum][i];
+      if (MetalFieldPresent)
+	number_density += BaryonField[MetalNum][i] * inv_metal_mol;
+      temperature[i] *= TemperatureUnits/max(number_density, tiny_number);
+      temperature[i] = max(temperature[i], MINIMUM_TEMPERATURE);
+    }
+  }
   else {
- 
+
     /* Find Multi-species fields. */
- 
+
     IdentifySpeciesFields(DeNum, HINum, HIINum, HeINum, HeIINum, HeIIINum,
 			  HMNum, H2INum, H2IINum, DINum, DIINum, HDINum);
  

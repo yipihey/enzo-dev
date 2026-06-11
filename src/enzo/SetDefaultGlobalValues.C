@@ -468,6 +468,7 @@ int SetDefaultGlobalValues(TopGridData &MetaData)
   uv_param                    = 1.1e-5;            // consistent with Razoumov Norman 2002
 
   MultiSpecies                = FALSE;             // off
+  ReducedChemistry            = FALSE;             // off (set in GrackleReadParameters)
   NoMultiSpeciesButColors     = FALSE;             // off
   ThreeBodyRate               = 0;                 // ABN02
   CIECooling                  = 1;

@@ -82,7 +82,15 @@ int grid::GrackleWrapper()
   DeNum = HINum = HIINum = HeINum = HeIINum = HeIIINum = HMNum = H2INum = 
     H2IINum = DINum = DIINum = HDINum = 0;
  
-  if (MultiSpecies)
+  if (ReducedChemistry) {
+    /* v2026 reduced network: only HII and H2I are stored.  De, HI, HeI, HeII,
+       HeIII, HM, H2II are reconstructed into scratch buffers below. */
+    HIINum = FindField(HIIDensity, FieldType, NumberOfBaryonFields);
+    H2INum = FindField(H2IDensity, FieldType, NumberOfBaryonFields);
+    if (HIINum < 0 || H2INum < 0)
+      ENZO_FAIL("ReducedChemistry: HII or H2I field not found.\n");
+  }
+  else if (MultiSpecies)
     if (IdentifySpeciesFields(DeNum, HINum, HIINum, HeINum, HeIINum, HeIIINum,
 		      HMNum, H2INum, H2IINum, DINum, DIINum, HDINum) == FAIL) {
       ENZO_FAIL("Error in grid->IdentifySpeciesFields.\n");
@@ -229,6 +237,47 @@ int grid::GrackleWrapper()
   my_fields.x_velocity      = velocity1;
   my_fields.y_velocity      = velocity2;
   my_fields.z_velocity      = velocity3;
+  /* v2026 reduced network: the 7 non-stored species live in transient scratch
+     (one grid's worth, freed after the call).  Grackle reconstructs them every
+     step: HI from rho-HII-H2I (start), He neutral + e=HII (write-back), HM/H2II
+     equilibrium.  We seed them here so the first subcycle has sane inputs. */
+  float *scratch_species = NULL;
+  if (ReducedChemistry) {
+    scratch_species = new float[7*size];
+    float *sc_e    = scratch_species + 0*size;
+    float *sc_HI   = scratch_species + 1*size;
+    float *sc_HeI  = scratch_species + 2*size;
+    float *sc_HeII = scratch_species + 3*size;
+    float *sc_HeIII= scratch_species + 4*size;
+    float *sc_HM   = scratch_species + 5*size;
+    float *sc_H2II = scratch_species + 6*size;
+    float fh = CoolData.HydrogenFractionByMass;
+    float *dens = BaryonField[DensNum];
+    float *HIIp = BaryonField[HIINum];
+    float *H2Ip = BaryonField[H2INum];
+    for (i = 0; i < size; i++) {
+      sc_e[i]     = HIIp[i];                                  /* n_e = n_HII */
+      float hi    = fh*dens[i] - HIIp[i] - H2Ip[i];
+      sc_HI[i]    = (hi > tiny_number) ? hi : tiny_number;    /* X_H*rho-HII-H2I */
+      sc_HeI[i]   = (1.0 - fh)*dens[i];                       /* all neutral He */
+      sc_HeII[i]  = tiny_number;
+      sc_HeIII[i] = tiny_number;
+      sc_HM[i]    = tiny_number;
+      sc_H2II[i]  = tiny_number;
+    }
+    my_fields.HI_density    = sc_HI;
+    my_fields.HII_density   = HIIp;
+    my_fields.HeI_density   = sc_HeI;
+    my_fields.HeII_density  = sc_HeII;
+    my_fields.HeIII_density = sc_HeIII;
+    my_fields.e_density     = sc_e;
+    my_fields.HM_density    = sc_HM;
+    my_fields.H2I_density   = H2Ip;
+    my_fields.H2II_density  = sc_H2II;
+    my_fields.DI_density    = NULL;
+    my_fields.DII_density   = NULL;
+    my_fields.HDI_density   = NULL;
+  } else {
   my_fields.HI_density      = BaryonField[HINum];
   my_fields.HII_density     = BaryonField[HIINum];
   my_fields.HeI_density     = BaryonField[HeINum];
@@ -243,6 +292,7 @@ int grid::GrackleWrapper()
   my_fields.DI_density      = BaryonField[DINum];
   my_fields.DII_density     = BaryonField[DIINum];
   my_fields.HDI_density     = BaryonField[HDINum];
+  }
 
   my_fields.metal_density   = MetalPointer;
 
@@ -282,7 +332,9 @@ int grid::GrackleWrapper()
 
   /* Call the chemistry solver. */
 
-  if (solve_chemistry(&grackle_units, &my_fields, (double) dt_cool) == FAIL){
+  int grackle_status = solve_chemistry(&grackle_units, &my_fields, (double) dt_cool);
+  if (scratch_species != NULL) delete [] scratch_species;
+  if (grackle_status == FAIL){
     fprintf(stderr, "Error in Grackle solve_chemistry.\n");
     return FAIL;
   }

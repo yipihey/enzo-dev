@@ -123,7 +123,13 @@ int grid::ComputeCoolingTime(float *cooling_time, int CoolingTimeOnly)
   DeNum = HINum = HIINum = HeINum = HeIINum = HeIIINum = HMNum = H2INum = 
     H2IINum = DINum = DIINum = HDINum = 0;
  
-  if (MultiSpecies)
+  if (ReducedChemistry) {
+    HIINum = FindField(HIIDensity, FieldType, NumberOfBaryonFields);
+    H2INum = FindField(H2IDensity, FieldType, NumberOfBaryonFields);
+    if (HIINum < 0 || H2INum < 0)
+      ENZO_FAIL("ReducedChemistry: HII or H2I field not found.\n");
+  }
+  else if (MultiSpecies)
     if (IdentifySpeciesFields(DeNum, HINum, HIINum, HeINum, HeIINum, HeIIINum,
 		      HMNum, H2INum, H2IINum, DINum, DIINum, HDINum) == FAIL) {
       ENZO_FAIL("Error in grid->IdentifySpeciesFields.\n");
@@ -278,6 +284,32 @@ int grid::ComputeCoolingTime(float *cooling_time, int CoolingTimeOnly)
     my_fields.y_velocity      = velocity2;
     my_fields.z_velocity      = velocity3;
 
+    /* v2026 reduced network: transient scratch for the 7 non-stored species
+       (cooling-time estimate only; freed after the call). */
+    float *scratch_species = NULL;
+    if (ReducedChemistry) {
+      scratch_species = new float[7*size];
+      float *sc_e=scratch_species+0*size, *sc_HI=scratch_species+1*size,
+        *sc_HeI=scratch_species+2*size, *sc_HeII=scratch_species+3*size,
+        *sc_HeIII=scratch_species+4*size, *sc_HM=scratch_species+5*size,
+        *sc_H2II=scratch_species+6*size;
+      float fh = CoolData.HydrogenFractionByMass;
+      float *dens = BaryonField[DensNum];
+      float *HIIp = BaryonField[HIINum], *H2Ip = BaryonField[H2INum];
+      for (i = 0; i < size; i++) {
+        sc_e[i]=HIIp[i];
+        float hi=fh*dens[i]-HIIp[i]-H2Ip[i];
+        sc_HI[i]=(hi>tiny_number)?hi:tiny_number;
+        sc_HeI[i]=(1.0-fh)*dens[i];
+        sc_HeII[i]=sc_HeIII[i]=sc_HM[i]=sc_H2II[i]=tiny_number;
+      }
+      my_fields.HI_density=sc_HI;    my_fields.HII_density=HIIp;
+      my_fields.HeI_density=sc_HeI;  my_fields.HeII_density=sc_HeII;
+      my_fields.HeIII_density=sc_HeIII; my_fields.e_density=sc_e;
+      my_fields.HM_density=sc_HM;    my_fields.H2I_density=H2Ip;
+      my_fields.H2II_density=sc_H2II;
+      my_fields.DI_density=NULL; my_fields.DII_density=NULL; my_fields.HDI_density=NULL;
+    } else {
     my_fields.HI_density      = BaryonField[HINum];
     my_fields.HII_density     = BaryonField[HIINum];
     my_fields.HeI_density     = BaryonField[HeINum];
@@ -292,6 +324,7 @@ int grid::ComputeCoolingTime(float *cooling_time, int CoolingTimeOnly)
     my_fields.DI_density      = BaryonField[DINum];
     my_fields.DII_density     = BaryonField[DIINum];
     my_fields.HDI_density     = BaryonField[HDINum];
+    }
 
     my_fields.metal_density   = MetalPointer;
 
@@ -322,7 +355,9 @@ int grid::ComputeCoolingTime(float *cooling_time, int CoolingTimeOnly)
     }
 #endif // TRANSFER
 
-    if (calculate_cooling_time(&grackle_units, &my_fields, cooling_time) == FAIL) {
+    int cct_status = calculate_cooling_time(&grackle_units, &my_fields, cooling_time);
+    if (scratch_species != NULL) delete [] scratch_species;
+    if (cct_status == FAIL) {
       ENZO_FAIL("Error in Grackle calculate_cooling_time.\n");
     }
 
