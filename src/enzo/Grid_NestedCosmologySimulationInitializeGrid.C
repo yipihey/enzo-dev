@@ -378,6 +378,8 @@ int grid::NestedCosmologySimulationInitializeGrid(
          HeIII, HM, H2II are reconstructed inside Grackle every step. */
       FieldType[HIINum   = NumberOfBaryonFields++] = HIIDensity;
       FieldType[H2INum   = NumberOfBaryonFields++] = H2IDensity;
+      if (ReducedChemistryD)
+        FieldType[HDINum = NumberOfBaryonFields++] = HDIDensity;
     }
     else if (MultiSpecies) {
       FieldType[DeNum    = NumberOfBaryonFields++] = ElectronDensity;
@@ -572,6 +574,9 @@ int grid::NestedCosmologySimulationInitializeGrid(
 	    BaryonField[0][i]*CoolData.HydrogenFractionByMass*POW(301.0,5.1)*
 	    POW(OmegaMatterNow, float(1.5))/
 	    CosmologySimulationOmegaBaryonNow/HubbleConstantNow*2.0;
+	  if (ReducedChemistryD)
+	    BaryonField[HDINum][i] = CoolData.DeuteriumToHydrogenRatio *
+	                             BaryonField[H2INum][i];
 	}
       }
       else if (MultiSpecies && ReadData) {

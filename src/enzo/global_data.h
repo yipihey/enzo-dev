@@ -427,6 +427,10 @@ EXTERN int MultiSpecies;
    allocated as BaryonFields; De, HI, HeI, HeII, HeIII, HM, H2II are NOT stored
    (Grackle reconstructs them every step).  Set in GrackleReadParameters. */
 EXTERN int ReducedChemistry;
+/* ReducedChemistry AND grackle equilibrium_deuterium: also advect HDI (the
+   third stored species) and reconstruct D, D+ -- for the HD abundance + HD
+   cooling.  Requires MultiSpecies = 3. */
+EXTERN int ReducedChemistryD;
 EXTERN int NoMultiSpeciesButColors;
 EXTERN int ThreeBodyRate;
 EXTERN RateDataType RateData;

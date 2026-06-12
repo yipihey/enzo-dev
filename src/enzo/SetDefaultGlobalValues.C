@@ -469,6 +469,7 @@ int SetDefaultGlobalValues(TopGridData &MetaData)
 
   MultiSpecies                = FALSE;             // off
   ReducedChemistry            = FALSE;             // off (set in GrackleReadParameters)
+  ReducedChemistryD           = FALSE;             // off (+HD; set in GrackleReadParameters)
   NoMultiSpeciesButColors     = FALSE;             // off
   ThreeBodyRate               = 0;                 // ABN02
   CIECooling                  = 1;

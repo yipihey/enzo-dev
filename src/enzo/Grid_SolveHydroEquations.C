@@ -105,6 +105,9 @@ int grid::SolveHydroEquations(int CycleNumber, int NumberOfSubgrids,
       if ((ColourNum =
            FindField(H2IDensity, FieldType, NumberOfBaryonFields)) >= 0)
         colnum[NumberOfColours++] = ColourNum;
+      if (ReducedChemistryD &&
+          (ColourNum = FindField(HDIDensity, FieldType, NumberOfBaryonFields)) >= 0)
+        colnum[NumberOfColours++] = ColourNum;   /* HD (deuterium) */
 
     }
     else if (MultiSpecies > 0 && RadiativeTransferFLD != 2) {

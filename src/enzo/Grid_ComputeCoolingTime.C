@@ -128,6 +128,8 @@ int grid::ComputeCoolingTime(float *cooling_time, int CoolingTimeOnly)
     H2INum = FindField(H2IDensity, FieldType, NumberOfBaryonFields);
     if (HIINum < 0 || H2INum < 0)
       ENZO_FAIL("ReducedChemistry: HII or H2I field not found.\n");
+    if (ReducedChemistryD)
+      HDINum = FindField(HDIDensity, FieldType, NumberOfBaryonFields);
   }
   else if (MultiSpecies)
     if (IdentifySpeciesFields(DeNum, HINum, HIINum, HeINum, HeIINum, HeIIINum,
@@ -288,12 +290,16 @@ int grid::ComputeCoolingTime(float *cooling_time, int CoolingTimeOnly)
        (cooling-time estimate only; freed after the call). */
     float *scratch_species = NULL;
     if (ReducedChemistry) {
-      scratch_species = new float[7*size];
+      int nsc = ReducedChemistryD ? 9 : 7;
+      scratch_species = new float[nsc*size];
       float *sc_e=scratch_species+0*size, *sc_HI=scratch_species+1*size,
         *sc_HeI=scratch_species+2*size, *sc_HeII=scratch_species+3*size,
         *sc_HeIII=scratch_species+4*size, *sc_HM=scratch_species+5*size,
         *sc_H2II=scratch_species+6*size;
+      float *sc_DI = ReducedChemistryD ? scratch_species+7*size : NULL;
+      float *sc_DII= ReducedChemistryD ? scratch_species+8*size : NULL;
       float fh = CoolData.HydrogenFractionByMass;
+      float dtoh = CoolData.DeuteriumToHydrogenRatio;
       float *dens = BaryonField[DensNum];
       float *HIIp = BaryonField[HIINum], *H2Ip = BaryonField[H2INum];
       for (i = 0; i < size; i++) {
@@ -302,13 +308,15 @@ int grid::ComputeCoolingTime(float *cooling_time, int CoolingTimeOnly)
         sc_HI[i]=(hi>tiny_number)?hi:tiny_number;
         sc_HeI[i]=(1.0-fh)*dens[i];
         sc_HeII[i]=sc_HeIII[i]=sc_HM[i]=sc_H2II[i]=tiny_number;
+        if (ReducedChemistryD) { sc_DI[i]=dtoh*sc_HI[i]; sc_DII[i]=dtoh*HIIp[i]; }
       }
       my_fields.HI_density=sc_HI;    my_fields.HII_density=HIIp;
       my_fields.HeI_density=sc_HeI;  my_fields.HeII_density=sc_HeII;
       my_fields.HeIII_density=sc_HeIII; my_fields.e_density=sc_e;
       my_fields.HM_density=sc_HM;    my_fields.H2I_density=H2Ip;
       my_fields.H2II_density=sc_H2II;
-      my_fields.DI_density=NULL; my_fields.DII_density=NULL; my_fields.HDI_density=NULL;
+      my_fields.DI_density=sc_DI; my_fields.DII_density=sc_DII;
+      my_fields.HDI_density = ReducedChemistryD ? BaryonField[HDINum] : NULL;
     } else {
     my_fields.HI_density      = BaryonField[HINum];
     my_fields.HII_density     = BaryonField[HIINum];

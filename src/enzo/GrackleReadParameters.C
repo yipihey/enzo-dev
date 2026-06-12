@@ -130,6 +130,8 @@ int GrackleReadParameters(FILE *fptr, FLOAT InitTime)
                     &grackle_data->equilibrium_h2_intermediates);
     ret += sscanf(line, "neutral_helium = %d",
                     &grackle_data->neutral_helium);
+    ret += sscanf(line, "equilibrium_deuterium = %d",
+                    &grackle_data->equilibrium_deuterium);
     ret += sscanf(line, "cmb_recombination = %d",
                     &grackle_data->cmb_recombination);
     ret += sscanf(line, "cosmology_hubble_constant_now = %lf",
@@ -271,9 +273,14 @@ int GrackleReadParameters(FILE *fptr, FLOAT InitTime)
   ReducedChemistry = (grackle_data->use_grackle == TRUE &&
                       grackle_data->neutral_helium > 0 &&
                       grackle_data->equilibrium_h2_intermediates > 0) ? TRUE : FALSE;
-  if (ReducedChemistry && MultiSpecies != 2)
+  // +HD: also advect HDI and reconstruct D, D+ (needs MultiSpecies = 3).
+  ReducedChemistryD = (ReducedChemistry &&
+                       grackle_data->equilibrium_deuterium > 0) ? TRUE : FALSE;
+  if (ReducedChemistry && !ReducedChemistryD && MultiSpecies != 2)
     ENZO_FAIL("ReducedChemistry (neutral_helium + equilibrium_h2_intermediates) "
               "requires MultiSpecies = 2.\n");
+  if (ReducedChemistryD && MultiSpecies != 3)
+    ENZO_FAIL("ReducedChemistry + equilibrium_deuterium requires MultiSpecies = 3.\n");
 
   // Initialize chemistry structure.
   if (initialize_chemistry_data(&grackle_units) == FAIL) {
