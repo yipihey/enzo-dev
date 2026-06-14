@@ -450,16 +450,19 @@ int grid::CosmologySimulationInitializeGrid(
   // If using multi-species, set the fields
  
   if (ReducedChemistry && ReadData)
-    /* v2026 reduced network: only HII and H2I are stored/initialized. */
+    /* v2026 reduced network: only HII and H2I are stored/initialized.  Use the
+       DIRECT physical fractions (x_HII = CosmologySimulationInitialFractionHII =
+       n_HII/n_H, x_H2 = CosmologySimulationInitialFractionH2I = n_H2/n_H), NOT the
+       legacy sqrt(Om)/(Ob*h) and POW(301,5.1) normalizations — those assume a
+       particular IC convention and badly over-ionize / mis-seed a recfast-seeded
+       high-z start (x_HII would be ~16x too high for Om=0.27, h=0.71).
+         HII  mass density = x_HII * X_H * rho            (n_HII * mH)
+         H2I  mass density = 2 * x_H2 * X_H * rho         (n_H2 * 2 mH) */
     for (i = 0; i < size; i++) {
       BaryonField[HIINum][i] = CosmologySimulationInitialFractionHII *
-		CoolData.HydrogenFractionByMass * BaryonField[0][i] *
-		sqrt(OmegaMatterNow)/
-		(CosmologySimulationOmegaBaryonNow*HubbleConstantNow);
-      BaryonField[H2INum][i] = CosmologySimulationInitialFractionH2I*
-		BaryonField[0][i]*CoolData.HydrogenFractionByMass*POW(301.0,5.1)*
-		POW(OmegaMatterNow, float(1.5))/
-		CosmologySimulationOmegaBaryonNow/HubbleConstantNow*2.0;
+		CoolData.HydrogenFractionByMass * BaryonField[0][i];
+      BaryonField[H2INum][i] = 2.0 * CosmologySimulationInitialFractionH2I *
+		CoolData.HydrogenFractionByMass * BaryonField[0][i];
       if (ReducedChemistryD)               // HD seed (mass): dtoh * H2I
         BaryonField[HDINum][i] = CoolData.DeuteriumToHydrogenRatio *
                                  BaryonField[H2INum][i];
@@ -583,9 +586,23 @@ int grid::CosmologySimulationInitializeGrid(
     }
 
     if (CosmologySimulationTotalEnergyName == NULL) {
-      for (i = 0; i < size; i++) {
-        BaryonField[iTE][i] = CosmologySimulationInitialTemperature/
-            TemperatureUnits/DEFAULT_MU/(Gamma-1.0);
+      if (ReducedChemistry) {
+        /* set eint from T with the ANALYTIC reduced-network mmw (neutral gas,
+           mu~1.22), NOT DEFAULT_MU=0.6 — else eint (hence the T Grackle reads
+           back) is ~2x wrong.  n_tot/rho = (0.25+0.75 X_H) + x_HII - 0.5 x_H2 . */
+        float fhm = CoolData.HydrogenFractionByMass;
+        for (i = 0; i < size; i++) {
+          float nd = (0.25 + 0.75*fhm)*BaryonField[0][i]
+                   + BaryonField[HIINum][i] - 0.5*BaryonField[H2INum][i];
+          float mu = BaryonField[0][i] / max(nd, tiny_number);
+          BaryonField[iTE][i] = CosmologySimulationInitialTemperature/
+              TemperatureUnits/mu/(Gamma-1.0);
+        }
+      } else {
+        for (i = 0; i < size; i++) {
+          BaryonField[iTE][i] = CosmologySimulationInitialTemperature/
+              TemperatureUnits/DEFAULT_MU/(Gamma-1.0);
+        }
       }
     }
 

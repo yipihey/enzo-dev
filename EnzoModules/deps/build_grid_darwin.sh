@@ -134,11 +134,13 @@ if [ -z "$libenzo" ]; then
   ( cd "$ENZO"
     make machine-darwin
     make "$MPI_MAKE_TARGET" $PREC_TARGETS integers-32 ${EXTRA_CONFIG:+$EXTRA_CONFIG}
+    make grackle-yes      # use_grackle cooling (the high-z chemistry runs need it)
     make clean
     LIBRARY_PATH="$GFLIB:${LIBRARY_PATH:-}" make lib -j"$(sysctl -n hw.ncpu)" \
       "${MACH_OVERRIDES[@]}" \
       MACH_FFLAGS="$FF" MACH_F90FLAGS="$FF" \
       LOCAL_HDF5_INSTALL="$HDF5" LOCAL_FC_INSTALL="$GFLIB" \
+      LOCAL_GRACKLE_INSTALL="${GRACKLE_INSTALL:-$HOME/grackle_install_f32}" \
       MACH_SHARED_FLAGS=-fPIC SHARED_OPT=-shared )
   built="$(ls "$ENZO"/libenzo_p*_b*.dylib 2>/dev/null | head -1 || true)"
   if [ "$ENZO_LIBDIR" != "$ENZO" ] && [ -n "$built" ]; then mv "$built" "$ENZO_LIBDIR/"; fi

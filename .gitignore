@@ -81,3 +81,16 @@ EnzoModules/RT_spectrum_table.dat
 
 # Agent worktrees
 .claude/worktrees/
+
+# ── generated artifacts / simulation data / build outputs (EnzoNG cleanup) ──
+.DS_Store
+*.dylib
+input_powerspec.txt
+src/enzo/f32/
+EnzoModules/deps/enzomodules_worker_*
+run/CosmologySimulation/SantaBarbara-256/
+run/CosmologySimulation/SantaBarbaraCluster/
+run/CosmologySimulation/dm_only/OutputLog
+run/CosmologySimulation/dm_only/Particle*
+run/CosmologySimulation/dm_only/RefinementMask
+run/CosmologySimulation/dm_only/amr.out
