@@ -766,6 +766,33 @@ int enzomodules_session_gravity_post(void *h, int level)
   return 0;
 }
 
+/* Field-only gravity-post: difference phi into the cell-centred AccelerationField
+ * (the field hydro AND an external particle pusher read) WITHOUT the particle
+ * branch of ComputeAccelerations.  Grid::ComputeAccelerations otherwise also does
+ * a +/-1/2-step particle drift + InterpolateParticlePositions to fill
+ * ParticleAcceleration and then DELETES the field again -- pure waste when a Julia
+ * GPU slot owns the particle interpolation + leapfrog (it reads the persisted
+ * baryon-branch field via problem_get_acceleration).  Mirrors the baryon branch of
+ * Grid_ComputeAccelerations.C exactly (same DiffType), so the field is identical. */
+int enzomodules_session_gravity_post_fields(void *h, int level)
+{
+  EMProblem *p = (EMProblem *)h;
+  HierarchyEntry **Grids;
+  int n = GenerateGridArray(p->LevelArray, level, &Grids);
+  for (int i = 0; i < n; i++) {
+    grid *g = Grids[i]->GridData;
+    if (g->ReturnNumberOfBaryonFields() > 0) {
+      int DiffType = (HydroMethod == Zeus_Hydro)
+                       ? DIFFERENCE_TYPE_STAGGERED : DIFFERENCE_TYPE_NORMAL;
+      g->ComputeAccelerationField(DiffType, level);
+    }
+    g->CopyPotentialToBaryonField();
+    g->ComputeAccelerationFieldExternal();
+  }
+  delete[] Grids;
+  return 0;
+}
+
 /* Deposit-only: populate the GravitatingMassField (PrepareDensityField) WITHOUT the
  * per-grid SolveForPotential.  Lets a :julia gravity slot read Enzo's exact source and
  * solve it on the GPU — skipping Enzo's slow subgrid multigrid. */
@@ -1231,6 +1258,23 @@ int enzomodules_session_cosmology(void *h, double *a_out, double *z_out)
   /* a is in units of (1+InitialRedshift)^-1 ... i.e. a=1 at InitialRedshift, so
    * 1+z = (1+InitialRedshift)/a. */
   if (z_out) *z_out = (double)((1.0 + InitialRedshift) / a - 1.0);
+  return 0;
+}
+
+/* Scale factor a(time) and its time-derivative da/dt at an ABSOLUTE code time --
+ * a thin wrapper over Enzo's own CosmologyComputeExpansionFactor, so a Julia
+ * particle pusher can build the comoving drift/kick coefficients with the SAME
+ * a, da/dt Enzo's UpdateParticlePosition/Velocity use (round-off identical).
+ * Outside comoving coordinates this returns a=1, da/dt=0. */
+int enzomodules_session_expansion_factor(void *h, double time,
+                                         double *a_out, double *dadt_out)
+{
+  if (!ComovingCoordinates) { if (a_out) *a_out = 1.0;
+                              if (dadt_out) *dadt_out = 0.0; return 1; }
+  FLOAT a = 1.0, dadt = 0.0;
+  CosmologyComputeExpansionFactor((FLOAT)time, &a, &dadt);
+  if (a_out)    *a_out    = (double)a;
+  if (dadt_out) *dadt_out = (double)dadt;
   return 0;
 }
 
