@@ -35,7 +35,7 @@ if [ "$FLAVOR" = "mpi" ]; then
   # via the EnzoLib test project's MPIPreferences/MPItrampoline_jll).
   TRAMP="${MPITRAMPOLINE_DIR:-}"
   if [ -z "$TRAMP" ]; then
-    TRAMP="$("$JULIA" --project="$repo/EnzoNG.jl/lib/EnzoLib/test" \
+    TRAMP="$("$JULIA" --project="$repo/../Vespa.jl/lib/EnzoLib/test" \
              -e 'import MPItrampoline_jll as T; T.is_available() && print(T.artifact_dir)' 2>/dev/null || true)"
   fi
   [ -n "$TRAMP" ] && [ -f "$TRAMP/include/mpi.h" ] || \
@@ -210,7 +210,7 @@ WORKER_INC="$repo/EnzoModules/src/enzomodules_worker_dispatch.inc"
 # (e.g. juliaup not on PATH) rather than failing the whole build under `set -e`.
 if [ -f "$WORKER_SRC" ] && "$JULIA" --version >/dev/null 2>&1; then
   echo "[worker] generating dispatch from the bridge manifest"
-  "$JULIA" --project="$repo/EnzoNG.jl/lib/EnzoLib/test" \
+  "$JULIA" --project="$repo/../Vespa.jl/lib/EnzoLib/test" \
     "$repo/EnzoModules/tools/gen_worker_dispatch.jl" "$WORKER_INC"
   if [ "$FLAVOR" = "mpi" ]; then
     # MPI worker: owns MPI_Init in its own (Julia-free) process, so it links the

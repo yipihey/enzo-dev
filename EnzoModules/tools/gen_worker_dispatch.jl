@@ -67,7 +67,7 @@ function main()
     m = EnzoLib.manifest()
     h = EnzoLib.contract_hash()
     open(out, "w") do io
-        println(io, "// AUTO-GENERATED from EnzoNG.jl/lib/EnzoLib/src/session.jl @xcall sites")
+        println(io, "// AUTO-GENERATED from Vespa.jl/lib/EnzoLib/src/session.jl @xcall sites")
         println(io, "// by EnzoModules/tools/gen_worker_dispatch.jl — DO NOT EDIT BY HAND.")
         println(io, "// Regenerate after changing the bridge surface; the baked contract hash")
         println(io, "// below must match EnzoLib.contract_hash() or the worker handshake fails.")
