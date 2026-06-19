@@ -25,7 +25,7 @@ if [ -z "${libenzo}" ]; then
   echo "[build_grid] building Enzo shared library (slow)..."
   ./configure
   ( cd "${enzo_src}"
-    make machine-ubuntu
+    make machine-${ENZO_MACH:-ubuntu}
     make use-mpi-no
     make precision-64
     make particles-64
@@ -45,7 +45,20 @@ CXX="${CXX:-g++}"
 # Our bridge/fixture sources live under EnzoModules/src; Enzo headers come from
 # the in-tree enzo source via -I (the sources are NOT part of the enzo build).
 src_dir="$(cd "${here}/../src" && pwd)"
-inc="-I${enzo_src} -I${enzo_src}/hydro_rk -I/usr/include/hdf5/serial"
+# Detect HDF5 layout: Ubuntu uses hdf5/serial subdir + lhdf5_serial;
+# RHEL/Rocky and most other distros use /usr/include + lhdf5.
+if [ -f /usr/include/hdf5/serial/hdf5.h ]; then
+  HDF5_INC=/usr/include/hdf5/serial
+  HDF5_LIB="-lhdf5_serial"
+elif [ -f /usr/include/hdf5.h ]; then
+  HDF5_INC=/usr/include
+  HDF5_LIB="-lhdf5"
+else
+  echo "[build_grid] WARNING: hdf5.h not found in standard paths; set HDF5_INC/HDF5_LIB manually"
+  HDF5_INC="${HDF5_INC:-/usr/include}"
+  HDF5_LIB="${HDF5_LIB:--lhdf5}"
+fi
+inc="-I${enzo_src} -I${enzo_src}/hydro_rk -I${HDF5_INC}"
 
 for src in Grid_EnzoModulesFixture enzomodules_grid_bridge enzomodules_problem_bridge enzomodules_chemistry_bridge enzomodules_radiation_bridge enzomodules_ppm_grid_bridge enzomodules_timing_init enzomodules_amr_bridge enzomodules_mhdct_bridge enzomodules_hierarchy_bridge enzomodules_halo_bridge; do
   # The grid-fixture is a grid-class extension declared in Enzo's Grid.h, so it
@@ -61,7 +74,7 @@ done
 echo "[build_grid] LD ${out}"
 ${CXX} -shared -fPIC -o "${out}" \
     "${here}/Grid_EnzoModulesFixture.o" "${here}/enzomodules_grid_bridge.o" "${here}/enzomodules_problem_bridge.o" "${here}/enzomodules_chemistry_bridge.o" "${here}/enzomodules_radiation_bridge.o" "${here}/enzomodules_ppm_grid_bridge.o" "${here}/enzomodules_timing_init.o" "${here}/enzomodules_amr_bridge.o" "${here}/enzomodules_mhdct_bridge.o" "${here}/enzomodules_hierarchy_bridge.o" "${here}/enzomodules_halo_bridge.o" \
-    -L"${enzo_src}" -l"${libname}" -lhdf5_serial -lz -lgfortran \
+    -L"${enzo_src}" -l"${libname}" ${HDF5_LIB} -lz -lgfortran \
     -Wl,-rpath,"${enzo_src}"
 rm -f "${here}/Grid_EnzoModulesFixture.o" "${here}/enzomodules_grid_bridge.o" "${here}/enzomodules_problem_bridge.o" "${here}/enzomodules_chemistry_bridge.o" "${here}/enzomodules_radiation_bridge.o" "${here}/enzomodules_ppm_grid_bridge.o" "${here}/enzomodules_timing_init.o" "${here}/enzomodules_amr_bridge.o" "${here}/enzomodules_mhdct_bridge.o" "${here}/enzomodules_hierarchy_bridge.o" "${here}/enzomodules_halo_bridge.o"
 
